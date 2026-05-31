@@ -7,4 +7,6 @@ websockets
 pydub
 static-ffmpeg
 python-multipart
+requests
+
 
