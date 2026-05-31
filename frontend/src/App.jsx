@@ -58,6 +58,23 @@ const getConnectionColor = (type) => {
   }
 };
 
+const getBackendUrls = () => {
+  const hostname = window.location.hostname;
+  const isLocal = hostname === 'localhost' || hostname === '127.0.0.1' || hostname.startsWith('192.168.') || !hostname;
+  
+  if (isLocal) {
+    return {
+      ws: `ws://${hostname || 'localhost'}:8000/ws`,
+      upload: `http://${hostname || 'localhost'}:8000/api/upload`
+    };
+  } else {
+    return {
+      ws: `wss://headsetconnect.onrender.com/ws`,
+      upload: `https://headsetconnect.onrender.com/api/upload`
+    };
+  }
+};
+
 // ─── DeviceCard ───────────────────────────────────────────────────────────────
 
 function DeviceCard({ device, isNew, calibrationState, onToggle, onVolume, onDelay, onCalibrate, onResetProfile }) {
@@ -346,7 +363,8 @@ export default function App() {
 
   useEffect(() => {
     function connectWebSocket() {
-      const ws = new WebSocket(`ws://${window.location.hostname || 'localhost'}:8000/ws`);
+      const urls = getBackendUrls();
+      const ws = new WebSocket(urls.ws);
       wsRef.current = ws;
 
       ws.onopen = () => {
@@ -492,8 +510,9 @@ export default function App() {
     try {
       setUploadProgress(0);
       
+      const urls = getBackendUrls();
       const xhr = new XMLHttpRequest();
-      xhr.open("POST", `http://${window.location.hostname || 'localhost'}:8000/api/upload`, true);
+      xhr.open("POST", urls.upload, true);
       
       xhr.upload.onprogress = (event) => {
         if (event.lengthComputable) {
