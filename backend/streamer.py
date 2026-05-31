@@ -52,8 +52,13 @@ class AudioStreamer:
             'noplaylist': True,
             'quiet': True,
             'no_warnings': True,
-            'extract_flat': False,
+            'extract_flat': True,
             'skip_download': True,
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['ios', 'android', 'mweb']
+                }
+            }
         }
 
         # Options for extracting a real stream URL — needs full format resolution
@@ -63,6 +68,11 @@ class AudioStreamer:
             'quiet': True,
             'no_warnings': True,
             'skip_download': True,
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['ios', 'android', 'mweb']
+                }
+            }
         }
 
 
@@ -79,62 +89,76 @@ class AudioStreamer:
             or "youtu.be" in query_str
         )
         
-        if not is_url:
-            # High-speed browser emulation scraper to prevent rate limit blocks on public clouds
-            try:
-                import requests
-                import re
-                import urllib.parse
-                import json
-                
-                logger.info(f"Using high-speed scrape search for query: {query_str}")
-                url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(query_str)}"
-                headers = {
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
-                    "Accept-Language": "en-US,en;q=0.9",
-                }
-                r = requests.get(url, headers=headers, timeout=6)
-                if r.status_code == 200:
-                    pattern = r"var ytInitialData\s*=\s*({.*?});"
-                    match = re.search(pattern, r.text)
-                    if match:
-                        data = json.loads(match.group(1))
-                        video_renderers = find_key_recursive(data, "videoRenderer")
-                        results = []
-                        for video in video_renderers:
-                            video_id = video.get("videoId")
-                            if not video_id:
-                                continue
-                            title = video.get("title", {}).get("runs", [{}])[0].get("text", "Unknown Title")
-                            duration_text = video.get("lengthText", {}).get("simpleText", "0:00")
+        # Check if direct video URL, extract video ID
+        video_id = None
+        if is_url:
+            import re
+            m = re.search(r'(?:v=|\/embed\/|\/watch\?v=|\/\d{1,2}\/|\/vi\/|youtu\.be\/|shorts\/)([a-zA-Z0-9_-]{11})', query_str)
+            if m:
+                video_id = m.group(1)
+        
+        search_query = video_id if video_id else query_str
+        
+        # High-speed browser emulation scraper to prevent rate limit blocks on public clouds
+        try:
+            import requests
+            import re
+            import urllib.parse
+            import json
+            
+            logger.info(f"Using high-speed scrape search for query: {search_query}")
+            url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(search_query)}"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+                "Accept-Language": "en-US,en;q=0.9",
+            }
+            r = requests.get(url, headers=headers, timeout=6)
+            if r.status_code == 200:
+                pattern = r"var ytInitialData\s*=\s*({.*?});"
+                match = re.search(pattern, r.text)
+                if match:
+                    data = json.loads(match.group(1))
+                    video_renderers = find_key_recursive(data, "videoRenderer")
+                    results = []
+                    for video in video_renderers:
+                        video_id_found = video.get("videoId")
+                        if not video_id_found:
+                            continue
+                        
+                        # Filter to be absolutely exact if we were looking for a specific video ID
+                        if video_id and video_id_found != video_id:
+                            continue
                             
-                            duration_secs = 0
-                            try:
-                                parts = list(map(int, duration_text.split(":")))
-                                if len(parts) == 2:
-                                    duration_secs = parts[0] * 60 + parts[1]
-                                elif len(parts) == 3:
-                                    duration_secs = parts[0] * 3600 + parts[1] * 60 + parts[2]
-                            except Exception:
-                                pass
-                                
-                            uploader = video.get("ownerText", {}).get("runs", [{}])[0].get("text", "Unknown Artist")
+                        title = video.get("title", {}).get("runs", [{}])[0].get("text", "Unknown Title")
+                        duration_text = video.get("lengthText", {}).get("simpleText", "0:00")
+                        
+                        duration_secs = 0
+                        try:
+                            parts = list(map(int, duration_text.split(":")))
+                            if len(parts) == 2:
+                                duration_secs = parts[0] * 60 + parts[1]
+                            elif len(parts) == 3:
+                                duration_secs = parts[0] * 3600 + parts[1] * 60 + parts[2]
+                        except Exception:
+                            pass
                             
-                            results.append({
-                                "id": video_id,
-                                "title": title,
-                                "duration": duration_secs,
-                                "uploader": uploader,
-                                "url": f"https://www.youtube.com/watch?v={video_id}",
-                                "thumbnail": f"https://img.youtube.com/vi/{video_id}/mqdefault.jpg",
-                            })
-                            if len(results) >= 5:
-                                break
-                        if results:
-                            logger.info(f"Scraper resolved {len(results)} search results instantly.")
-                            return results
-            except Exception as scraper_err:
-                logger.warning(f"High-speed scraping search failed: {scraper_err}. Falling back to yt-dlp...")
+                        uploader = video.get("ownerText", {}).get("runs", [{}])[0].get("text", "Unknown Artist")
+                        
+                        results.append({
+                            "id": video_id_found,
+                            "title": title,
+                            "duration": duration_secs,
+                            "uploader": uploader,
+                            "url": f"https://www.youtube.com/watch?v={video_id_found}",
+                            "thumbnail": f"https://img.youtube.com/vi/{video_id_found}/mqdefault.jpg",
+                        })
+                        if len(results) >= 5:
+                            break
+                    if results:
+                        logger.info(f"Scraper resolved {len(results)} search results instantly.")
+                        return results
+        except Exception as scraper_err:
+            logger.warning(f"High-speed scraping search failed: {scraper_err}. Falling back to yt-dlp...")
 
         # Fallback to standard yt-dlp search/extract (direct URL resolution)
         logger.info(f"Searching YouTube via yt-dlp: {query_str}")
