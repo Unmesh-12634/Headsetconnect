@@ -205,38 +205,186 @@ class AudioStreamer:
             logger.error(f"Error searching YouTube: {e}")
             return []
 
-    def get_track_info(self, url):
-        """Extract stream url and metadata for a direct YouTube URL."""
-        logger.info(f"Extracting info for URL: {url}")
+    def _extract_video_id(self, url):
+        """Pull the 11-char video ID out of any YouTube URL form."""
+        import re
+        m = re.search(
+            r'(?:v=|/embed/|/watch\?v=|/\d{1,2}/|/vi/|youtu\.be/|shorts/)([a-zA-Z0-9_-]{11})',
+            url,
+        )
+        return m.group(1) if m else None
+
+    def _ydl_extract(self, url, client_names):
+        """
+        Try yt-dlp with a specific list of player clients.
+        Returns (info_dict | None).
+        """
+        opts = {
+            'format': 'bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio/best',
+            'noplaylist': True,
+            'quiet': True,
+            'no_warnings': True,
+            'skip_download': True,
+            'extractor_args': {
+                'youtube': {
+                    'player_client': client_names,
+                    'skip': ['webpage'],          # skip the bot-challenged desktop page
+                }
+            },
+        }
         try:
-            with yt_dlp.YoutubeDL(self.stream_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-                if not info:
-                    logger.error("yt-dlp returned no info")
-                    return None
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                return ydl.extract_info(url, download=False)
+        except Exception as e:
+            logger.warning(f"yt-dlp [{client_names}] failed: {e}")
+            return None
 
-                stream_url = info.get("url")
-                if not stream_url:
-                    formats = info.get("formats") or []
-                    audio_formats = [
-                        f for f in formats
-                        if f.get("url") and f.get("acodec") != "none"
-                        and f.get("vcodec") in (None, "", "none")
+    def _piped_extract(self, video_id):
+        """
+        Fetch audio stream via the open-source Piped API (no bot challenge).
+        Returns a minimal info dict or None.
+        """
+        try:
+            import requests, json
+            # Try multiple public Piped instances in order
+            instances = [
+                "https://pipedapi.kavin.rocks",
+                "https://piped-api.garudalinux.org",
+                "https://api.piped.projectsegfau.lt",
+                "https://pipedapi.tokhmi.xyz",
+            ]
+            for base in instances:
+                try:
+                    r = requests.get(
+                        f"{base}/streams/{video_id}",
+                        timeout=8,
+                        headers={"User-Agent": "Mozilla/5.0"},
+                    )
+                    if r.status_code != 200:
+                        continue
+                    data = r.json()
+                    # Piped returns audioStreams sorted best-first
+                    audio_streams = data.get("audioStreams", [])
+                    if not audio_streams:
+                        continue
+                    # Pick highest quality
+                    best = max(audio_streams, key=lambda s: s.get("bitrate", 0))
+                    stream_url = best.get("url")
+                    if not stream_url:
+                        continue
+                    logger.info(f"Piped instance {base} resolved stream OK")
+                    return {
+                        "id": video_id,
+                        "title": data.get("title", "Unknown Title"),
+                        "duration": int(data.get("duration", 0)),
+                        "uploader": data.get("uploader", "Unknown Artist"),
+                        "stream_url": stream_url,
+                        "url": f"https://www.youtube.com/watch?v={video_id}",
+                        "thumbnail": data.get("thumbnailUrl")
+                            or f"https://img.youtube.com/vi/{video_id}/mqdefault.jpg",
+                        "http_headers": {},
+                    }
+                except Exception as inst_err:
+                    logger.warning(f"Piped instance {base} error: {inst_err}")
+                    continue
+        except Exception as e:
+            logger.warning(f"Piped extraction failed entirely: {e}")
+        return None
+
+    def _invidious_extract(self, video_id):
+        """
+        Fetch audio stream URL via a public Invidious instance.
+        Returns a minimal info dict or None.
+        """
+        try:
+            import requests
+            instances = [
+                "https://invidious.snopyta.org",
+                "https://vid.puffyan.us",
+                "https://invidious.namazso.eu",
+                "https://inv.riverside.rocks",
+            ]
+            for base in instances:
+                try:
+                    r = requests.get(
+                        f"{base}/api/v1/videos/{video_id}?fields=title,author,lengthSeconds,adaptiveFormats,videoThumbnails",
+                        timeout=8,
+                        headers={"User-Agent": "Mozilla/5.0"},
+                    )
+                    if r.status_code != 200:
+                        continue
+                    data = r.json()
+                    formats = [
+                        f for f in data.get("adaptiveFormats", [])
+                        if f.get("type", "").startswith("audio")
                     ]
-                    if not audio_formats:
-                        audio_formats = [f for f in formats if f.get("url")]
-                    if audio_formats:
-                        audio_formats.sort(
-                            key=lambda f: f.get("abr") or f.get("tbr") or 0,
-                            reverse=True,
-                        )
-                        stream_url = audio_formats[0]["url"]
+                    if not formats:
+                        continue
+                    best = max(formats, key=lambda f: int(f.get("bitrate", 0)))
+                    stream_url = best.get("url")
+                    if not stream_url:
+                        continue
+                    logger.info(f"Invidious instance {base} resolved stream OK")
+                    thumbs = data.get("videoThumbnails", [])
+                    thumb = thumbs[-1]["url"] if thumbs else f"https://img.youtube.com/vi/{video_id}/mqdefault.jpg"
+                    return {
+                        "id": video_id,
+                        "title": data.get("title", "Unknown Title"),
+                        "duration": int(data.get("lengthSeconds", 0)),
+                        "uploader": data.get("author", "Unknown Artist"),
+                        "stream_url": stream_url,
+                        "url": f"https://www.youtube.com/watch?v={video_id}",
+                        "thumbnail": thumb,
+                        "http_headers": {},
+                    }
+                except Exception as inst_err:
+                    logger.warning(f"Invidious instance {base} error: {inst_err}")
+                    continue
+        except Exception as e:
+            logger.warning(f"Invidious extraction failed entirely: {e}")
+        return None
 
-                if not stream_url:
-                    logger.error("Could not find a usable stream URL in yt-dlp response")
-                    return None
+    def get_track_info(self, url):
+        """
+        Extract stream URL and metadata for a YouTube URL.
 
-                logger.info(f"Resolved stream URL for: {info.get('title')}")
+        Tries multiple strategies in order to defeat cloud-IP bot blocking:
+          1. yt-dlp  →  tv_embedded client  (no sign-in challenge)
+          2. yt-dlp  →  ios / android client (mobile API, no bot page)
+          3. yt-dlp  →  mweb client
+          4. Piped   →  open-source YouTube proxy (completely bypasses YT)
+          5. Invidious → alternative open-source proxy
+        """
+        logger.info(f"Extracting info for URL: {url}")
+        video_id = self._extract_video_id(url)
+
+        # ── Strategy 1-3: yt-dlp with different mobile/embedded clients ──────
+        client_priority = [
+            ['tv_embedded'],          # embedded TV client — rarely challenged
+            ['ios', 'android'],       # mobile APIs
+            ['mweb'],                 # mobile web
+        ]
+        for clients in client_priority:
+            info = self._ydl_extract(url, clients)
+            if not info:
+                continue
+
+            stream_url = info.get("url")
+            if not stream_url:
+                formats = info.get("formats") or []
+                audio_fmts = [
+                    f for f in formats
+                    if f.get("url") and f.get("acodec") != "none"
+                    and f.get("vcodec") in (None, "", "none")
+                ]
+                if not audio_fmts:
+                    audio_fmts = [f for f in formats if f.get("url")]
+                if audio_fmts:
+                    audio_fmts.sort(key=lambda f: f.get("abr") or f.get("tbr") or 0, reverse=True)
+                    stream_url = audio_fmts[0]["url"]
+
+            if stream_url:
+                logger.info(f"yt-dlp [{clients}] resolved stream for: {info.get('title')}")
                 return {
                     "id": info.get("id"),
                     "title": info.get("title"),
@@ -248,9 +396,24 @@ class AudioStreamer:
                         or f"https://img.youtube.com/vi/{info.get('id')}/mqdefault.jpg",
                     "http_headers": info.get("http_headers"),
                 }
-        except Exception as e:
-            logger.error(f"Error extracting track info: {e}")
-            return None
+            logger.warning(f"yt-dlp [{clients}] returned info but no stream URL — trying next client")
+
+        # ── Strategy 4: Piped API ─────────────────────────────────────────────
+        if video_id:
+            logger.info("yt-dlp exhausted all clients — trying Piped API...")
+            piped = self._piped_extract(video_id)
+            if piped:
+                return piped
+
+        # ── Strategy 5: Invidious ─────────────────────────────────────────────
+        if video_id:
+            logger.info("Piped failed — trying Invidious API...")
+            invidious = self._invidious_extract(video_id)
+            if invidious:
+                return invidious
+
+        logger.error(f"All stream extraction strategies exhausted for: {url}")
+        return None
 
     # ── Playback control ─────────────────────────────────────────────────────
 

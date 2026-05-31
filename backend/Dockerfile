@@ -18,6 +18,9 @@ ENV HEADLESS=true
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Always upgrade yt-dlp to latest so YouTube player client signatures stay fresh
+RUN pip install --no-cache-dir --upgrade yt-dlp
+
 # Copy the rest of the backend source code
 COPY . .
 
