@@ -1869,3 +1869,8 @@ input:checked + .slider::before { transform: translateX(20px); }
   to { transform: translateY(0); opacity: 1; }
 }
 
+.spinning {
+  animation: spin 1s linear infinite;
+}
+
+

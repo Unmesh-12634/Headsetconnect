@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import StreamingResponse
 import uvicorn
 import asyncio
 import json
@@ -108,6 +109,36 @@ async def upload_audio_file(file: UploadFile = File(...)):
 
     except Exception as e:
         logger.error(f"Error handling upload: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/stream")
+def stream_audio(url: str):
+    """Secure CORS-enabled HTTP proxy endpoint to stream direct YouTube audio to the browser.
+    Ensures that the browser is bypassed from YouTube CDN's strict origin headers.
+    """
+    try:
+        logger.info(f"Received stream request for: {url}")
+        
+        # Resolve YouTube direct stream URL
+        full_info = streamer.get_track_info(url)
+        if not full_info or not full_info.get("stream_url"):
+            logger.error("Could not resolve stream URL for: %s", url)
+            return {"success": False, "error": "Could not resolve YouTube stream URL."}
+            
+        stream_url = full_info["stream_url"]
+        headers = full_info.get("http_headers", {})
+        
+        # Proxy YouTube's chunked audio data to the browser
+        def generate():
+            import requests
+            r = requests.get(stream_url, headers=headers, stream=True)
+            for chunk in r.iter_content(chunk_size=1024 * 64):
+                yield chunk
+                
+        return StreamingResponse(generate(), media_type="audio/webm")
+    except Exception as e:
+        logger.error(f"Error proxying audio stream: {e}")
         return {"success": False, "error": str(e)}
 
 

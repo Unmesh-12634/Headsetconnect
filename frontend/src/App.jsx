@@ -355,11 +355,108 @@ export default function App() {
   const [draggingIndex, setDraggingIndex] = useState(null);
   const [swipeStates, setSwipeStates] = useState({}); // { trackId: translateX }
 
+  const [isLoading,      setIsLoading]      = useState(false);
+
   const wsRef        = useRef(null);
   const reconnectRef = useRef(null);
   const touchStartRef = useRef(null);
 
+  // Web Audio Refs
+  const audioContextRef = useRef(null);
+  const decodedBufferRef = useRef(null);
+  const activeSourcesRef = useRef({}); // index -> { sourceNode, delayNode, gainNode, audioElement }
+  const startTimeRef = useRef(0);
+  const startOffsetRef = useRef(0);
+  const progressIntervalRef = useRef(null);
+  const currentTrackRef = useRef(null);
+  const isPlayingRef = useRef(false);
+  const devicesRef = useRef([]);
+
+  useEffect(() => {
+    isPlayingRef.current = isPlaying;
+  }, [isPlaying]);
+
+  useEffect(() => {
+    devicesRef.current = devices;
+  }, [devices]);
+
   // ── WebSocket ───────────────────────────────────────────────────────────────
+
+  // Dynamic Web Audio Output & Device Discovery
+  const scanBrowserDevices = async () => {
+    try {
+      setIsScanning(true);
+      let stream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch (permErr) {
+        console.warn("Microphone permission denied or not available:", permErr);
+      }
+
+      const allDevices = await navigator.mediaDevices.enumerateDevices();
+      
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+      }
+
+      const outputDevices = allDevices.filter(d => d.kind === 'audiooutput');
+      
+      const mapped = outputDevices.map((d, idx) => {
+        const name = d.label || `Output Device ${idx + 1}`;
+        let connection_type = 'Wired';
+        const lowercaseLabel = name.toLowerCase();
+        if (lowercaseLabel.includes('bluetooth') || lowercaseLabel.includes('pods') || lowercaseLabel.includes('buds') || lowercaseLabel.includes('freebuds') || lowercaseLabel.includes('wireless')) {
+          connection_type = 'Bluetooth';
+        } else if (lowercaseLabel.includes('usb')) {
+          connection_type = 'USB';
+        } else if (lowercaseLabel.includes('speaker') || lowercaseLabel.includes('directsound') || lowercaseLabel.includes('realtek')) {
+          connection_type = 'Speaker';
+        }
+
+        // Preserve volume and delay if already scanned previously
+        const existing = devicesRef.current.find(ed => ed.index === d.deviceId);
+        return {
+          index: d.deviceId || String(idx),
+          name: name,
+          volume: existing ? existing.volume : 1.0,
+          delay_ms: existing ? existing.delay_ms : 0.0,
+          latency_ms: existing ? existing.latency_ms : 0.0,
+          active: existing ? existing.active : false,
+          connection_type: connection_type,
+          deviceId: d.deviceId
+        };
+      });
+
+      setDevices(mapped);
+      setIsScanning(false);
+    } catch (err) {
+      console.error("Error scanning browser output devices:", err);
+      setIsScanning(false);
+    }
+  };
+
+  useEffect(() => {
+    scanBrowserDevices();
+
+    const handleDeviceChange = () => {
+      console.log("Media devices changed, scanning output devices...");
+      scanBrowserDevices();
+    };
+
+    if (navigator.mediaDevices) {
+      navigator.mediaDevices.addEventListener('devicechange', handleDeviceChange);
+    }
+
+    return () => {
+      if (navigator.mediaDevices) {
+        navigator.mediaDevices.removeEventListener('devicechange', handleDeviceChange);
+      }
+      stopAllSources();
+      if (progressIntervalRef.current) {
+        clearInterval(progressIntervalRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     function connectWebSocket() {
@@ -375,48 +472,92 @@ export default function App() {
         try {
           const msg = JSON.parse(evt.data);
           if (msg.type === 'state_update') {
-            const incoming = msg.devices || [];
-            setDevices(prev => {
-              const prevNames = new Set(prev.map(d => d.name));
-              const added     = incoming.filter(d => !prevNames.has(d.name));
-
-              if (added.length > 0 && initialLoadDone.current) {
-                // Hot-plug: device arrived after the app was already running
-                setHotPlugNames(s => { const ns = new Set(s); added.forEach(d => ns.add(d.name)); return ns; });
-                setNewDeviceAlert(`New device available: ${added.map(d => d.name).join(', ')}`);
-                setTimeout(() => setNewDeviceAlert(null), 5000);
-              }
-
-              if (!initialLoadDone.current && incoming.length > 0) {
-                initialLoadDone.current = true;
-              }
-              return incoming;
-            });
-            setIsPlaying(msg.is_playing);
-            setProgress(msg.progress || 0);
-            setCurrentTrack(msg.current_track);
-            setIsScanning(false);
-
-            // Play Queue, Local Library
             if (msg.queue !== undefined) setQueue(msg.queue || []);
             if (msg.library !== undefined) setLibrary(msg.library || []);
+
+            const isNewTrack = !currentTrackRef.current || (msg.current_track && currentTrackRef.current.id !== msg.current_track.id);
+            const isNoTrack = !msg.current_track;
+
+            if (isNoTrack) {
+              if (currentTrackRef.current) {
+                stopAllSources();
+                decodedBufferRef.current = null;
+                currentTrackRef.current = null;
+                setCurrentTrack(null);
+                setProgress(0);
+                startOffsetRef.current = 0;
+              }
+            } else if (isNewTrack) {
+              currentTrackRef.current = msg.current_track;
+              setCurrentTrack(msg.current_track);
+              
+              setIsLoading(true);
+              stopAllSources();
+              startOffsetRef.current = msg.progress || 0;
+              setProgress(msg.progress || 0);
+
+              const baseUrl = getBackendUrls().upload.replace('/api/upload', '');
+              let finalStreamUrl = msg.current_track.is_local ? msg.current_track.stream_url : `${baseUrl}/api/stream?url=${encodeURIComponent(msg.current_track.url)}`;
+              if (msg.current_track.is_local) {
+                const hostname = window.location.hostname;
+                const isLocal = hostname === 'localhost' || hostname === '127.0.0.1' || hostname.startsWith('192.168.') || !hostname;
+                if (!isLocal) {
+                  finalStreamUrl = finalStreamUrl.replace('http://localhost:8000', 'https://headsetconnect.onrender.com');
+                }
+              }
+
+              fetch(finalStreamUrl)
+                .then(res => {
+                  if (!res.ok) throw new Error("Audio stream proxy returned non-200");
+                  return res.arrayBuffer();
+                })
+                .then(arrayBuffer => {
+                  if (!audioContextRef.current) {
+                    audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
+                  }
+                  return audioContextRef.current.decodeAudioData(arrayBuffer);
+                })
+                .then(decodedBuffer => {
+                  decodedBufferRef.current = decodedBuffer;
+                  setIsLoading(false);
+                  
+                  if (isPlayingRef.current) {
+                    startSourcesAt(startOffsetRef.current);
+                  }
+                })
+                .catch(err => {
+                  console.error("Failed to fetch/decode track:", err);
+                  setIsLoading(false);
+                });
+            }
+
+            if (msg.is_playing !== undefined) {
+              const wasPlaying = isPlayingRef.current;
+              setIsPlaying(msg.is_playing);
+
+              if (msg.is_playing) {
+                const currentPos = startOffsetRef.current;
+                const progressDiff = Math.abs((msg.progress || 0) - currentPos);
+
+                if (!wasPlaying || progressDiff > 1.5) {
+                  startOffsetRef.current = msg.progress || 0;
+                  if (decodedBufferRef.current && !isLoading) {
+                    startSourcesAt(msg.progress || 0);
+                  }
+                }
+              } else {
+                if (wasPlaying) {
+                  stopAllSources();
+                  startOffsetRef.current = msg.progress || 0;
+                  setProgress(msg.progress || 0);
+                }
+              }
+            }
+
+            setIsScanning(false);
           } else if (msg.type === 'search_results') {
             setSearchResults(msg.results || []);
             setIsSearching(false);
-          } else if (msg.type === 'calibration_result') {
-            const idx = msg.index;
-            setCalibrationStates(prev => ({
-              ...prev,
-              [idx]: msg.success ? {
-                status: 'success',
-                latency: msg.latency_ms,
-                errorMsg: ''
-              } : {
-                status: 'error',
-                latency: 0,
-                errorMsg: msg.error || 'Calibration failed.'
-              }
-            }));
           }
         } catch (e) {
           console.error('WS parse error:', e);
@@ -442,10 +583,294 @@ export default function App() {
       wsRef.current.send(JSON.stringify(payload));
   };
 
+
+  // ── Web Audio Routing & Sync Engine ─────────────────────────────────────────
+
+  const startSourcesAt = (offset) => {
+    if (!decodedBufferRef.current) return;
+    
+    const audioCtx = audioContextRef.current;
+    const buffer = decodedBufferRef.current;
+    
+    stopAllSources();
+    
+    const activeDevices = devicesRef.current.filter(d => d.active);
+    if (activeDevices.length === 0) {
+      console.warn("No active audio output devices selected.");
+      return;
+    }
+    
+    const startTime = audioCtx.currentTime + 0.05; // 50ms scheduling buffer
+    startTimeRef.current = startTime - offset;
+    
+    const newActiveSources = {};
+    
+    activeDevices.forEach(device => {
+      try {
+        const sourceNode = audioCtx.createBufferSource();
+        sourceNode.buffer = buffer;
+        
+        const delayNode = audioCtx.createDelay(2.0);
+        const totalDelaySec = (device.delay_ms + (device.latency_ms || 0)) / 1000.0;
+        delayNode.delayTime.setValueAtTime(totalDelaySec, audioCtx.currentTime);
+        
+        const gainNode = audioCtx.createGain();
+        gainNode.gain.setValueAtTime(device.volume, audioCtx.currentTime);
+        
+        const destNode = audioCtx.createMediaStreamDestination();
+        
+        sourceNode.connect(delayNode);
+        delayNode.connect(gainNode);
+        gainNode.connect(destNode);
+        
+        const audioEl = new Audio();
+        audioEl.srcObject = destNode.stream;
+        audioEl.muted = false;
+        audioEl.volume = 1.0;
+        
+        if (typeof audioEl.setSinkId === 'function' && device.deviceId) {
+          audioEl.setSinkId(device.deviceId).catch(err => {
+            console.error(`Failed to set sink ID for device: ${device.name}`, err);
+          });
+        }
+        
+        audioEl.play().catch(err => {
+          console.error("Audio element failed to play:", err);
+        });
+        
+        sourceNode.start(startTime, offset);
+        
+        newActiveSources[device.index] = {
+          sourceNode,
+          delayNode,
+          gainNode,
+          audioElement: audioEl,
+          destNode
+        };
+      } catch (err) {
+        console.error(`Failed to initialize Web Audio pipeline for device: ${device.name}`, err);
+      }
+    });
+    
+    activeSourcesRef.current = newActiveSources;
+    
+    if (progressIntervalRef.current) {
+      clearInterval(progressIntervalRef.current);
+    }
+    progressIntervalRef.current = setInterval(() => {
+      if (audioContextRef.current && isPlayingRef.current && decodedBufferRef.current) {
+        const elapsed = audioContextRef.current.currentTime - startTimeRef.current;
+        const currentPos = Math.min(decodedBufferRef.current.duration, elapsed);
+        setProgress(currentPos);
+        
+        if (elapsed >= decodedBufferRef.current.duration) {
+          clearInterval(progressIntervalRef.current);
+          handleTrackFinished();
+        }
+      }
+    }, 250);
+  };
+
+  const stopAllSources = () => {
+    if (progressIntervalRef.current) {
+      clearInterval(progressIntervalRef.current);
+    }
+    
+    if (activeSourcesRef.current) {
+      Object.keys(activeSourcesRef.current).forEach(idx => {
+        const activeSrc = activeSourcesRef.current[idx];
+        try {
+          activeSrc.sourceNode.stop();
+          activeSrc.sourceNode.disconnect();
+        } catch (e) {}
+        try {
+          activeSrc.delayNode.disconnect();
+          activeSrc.gainNode.disconnect();
+        } catch (e) {}
+        if (activeSrc.audioElement) {
+          try {
+            activeSrc.audioElement.pause();
+            activeSrc.audioElement.srcObject = null;
+          } catch (e) {}
+        }
+      });
+      activeSourcesRef.current = {};
+    }
+  };
+
+  const startDevicePlayback = (idx, offset) => {
+    const device = devicesRef.current.find(d => d.index === idx);
+    if (!device || !decodedBufferRef.current) return;
+    
+    const audioCtx = audioContextRef.current;
+    const buffer = decodedBufferRef.current;
+    
+    try {
+      const sourceNode = audioCtx.createBufferSource();
+      sourceNode.buffer = buffer;
+      
+      const delayNode = audioCtx.createDelay(2.0);
+      const totalDelaySec = (device.delay_ms + (device.latency_ms || 0)) / 1000.0;
+      delayNode.delayTime.setValueAtTime(totalDelaySec, audioCtx.currentTime);
+      
+      const gainNode = audioCtx.createGain();
+      gainNode.gain.setValueAtTime(device.volume, audioCtx.currentTime);
+      
+      const destNode = audioCtx.createMediaStreamDestination();
+      
+      sourceNode.connect(delayNode);
+      delayNode.connect(gainNode);
+      gainNode.connect(destNode);
+      
+      const audioEl = new Audio();
+      audioEl.srcObject = destNode.stream;
+      audioEl.muted = false;
+      audioEl.volume = 1.0;
+      
+      if (typeof audioEl.setSinkId === 'function' && device.deviceId) {
+        audioEl.setSinkId(device.deviceId).catch(err => {
+          console.error(`Failed to set sink ID for device: ${device.name}`, err);
+        });
+      }
+      
+      audioEl.play().catch(err => {
+        console.error("Audio element failed to play:", err);
+      });
+      
+      sourceNode.start(audioCtx.currentTime, offset);
+      
+      activeSourcesRef.current[idx] = {
+        sourceNode,
+        delayNode,
+        gainNode,
+        audioElement: audioEl,
+        destNode
+      };
+    } catch (err) {
+      console.error(`Failed to start individual device: ${device.name}`, err);
+    }
+  };
+
+  const stopDevicePlayback = (idx) => {
+    const activeSrc = activeSourcesRef.current[idx];
+    if (activeSrc) {
+      try {
+        activeSrc.sourceNode.stop();
+      } catch (e) {}
+      if (activeSrc.audioElement) {
+        activeSrc.audioElement.pause();
+        activeSrc.audioElement.srcObject = null;
+      }
+      delete activeSourcesRef.current[idx];
+    }
+  };
+
+  const handleTrackFinished = () => {
+    if (wsConnected) {
+      // Stream advances automatically via the server side sequence pacing
+    } else {
+      // Local queue fallback advancing
+      if (queue.length > 0) {
+        const nextTrack = queue[0];
+        setQueue(prev => prev.slice(1));
+        loadAndPlayTrackLocally(nextTrack);
+      } else {
+        setIsPlaying(false);
+        stopAllSources();
+        startOffsetRef.current = 0;
+        setProgress(0);
+      }
+    }
+  };
+
+  // ── Standalone Fallback Player ──────────────────────────────────────────────
+
+  const loadAndPlayTrackLocally = async (track) => {
+    try {
+      setIsLoading(true);
+      stopAllSources();
+      startOffsetRef.current = 0;
+      setProgress(0);
+      setCurrentTrack(track);
+      currentTrackRef.current = track;
+
+      const baseUrl = getBackendUrls().upload.replace('/api/upload', '');
+      let finalStreamUrl = track.is_local ? track.stream_url : `${baseUrl}/api/stream?url=${encodeURIComponent(track.url)}`;
+      if (track.is_local) {
+        const hostname = window.location.hostname;
+        const isLocal = hostname === 'localhost' || hostname === '127.0.0.1' || hostname.startsWith('192.168.') || !hostname;
+        if (!isLocal) {
+          finalStreamUrl = finalStreamUrl.replace('http://localhost:8000', 'https://headsetconnect.onrender.com');
+        }
+      }
+
+      const response = await fetch(finalStreamUrl);
+      if (!response.ok) throw new Error("Failed to fetch stream");
+      const arrayBuffer = await response.arrayBuffer();
+
+      if (!audioContextRef.current) {
+        audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      const audioCtx = audioContextRef.current;
+      if (audioCtx.state === 'suspended') {
+        await audioCtx.resume();
+      }
+
+      const decodedBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+      decodedBufferRef.current = decodedBuffer;
+      setIsLoading(false);
+
+      setIsPlaying(true);
+      startSourcesAt(0);
+    } catch (err) {
+      console.error("Failed to load and play track locally:", err);
+      alert("Error loading audio. Please verify backend is online.");
+      setIsLoading(false);
+    }
+  };
+
+  // ── Device State Mutators ───────────────────────────────────────────────────
+
+  const handleToggleDevice = (idx, active) => {
+    setDevices(prev => prev.map(d => d.index === idx ? { ...d, active } : d));
+    
+    // Immediately start or stop playback for this device if actively playing
+    if (isPlayingRef.current && decodedBufferRef.current) {
+      if (active) {
+        setTimeout(() => {
+          startDevicePlayback(idx, progress);
+        }, 50);
+      } else {
+        stopDevicePlayback(idx);
+      }
+    }
+  };
+
+  const handleVolumeChange = (idx, vol) => {
+    setDevices(prev => prev.map(d => d.index === idx ? { ...d, volume: vol } : d));
+    
+    // Realtime adjustment of browser gain node
+    if (activeSourcesRef.current[idx]) {
+      const audioCtx = audioContextRef.current;
+      activeSourcesRef.current[idx].gainNode.gain.setValueAtTime(vol, audioCtx.currentTime);
+    }
+  };
+
+  const handleDelayChange = (idx, ms) => {
+    setDevices(prev => prev.map(d => d.index === idx ? { ...d, delay_ms: ms } : d));
+    
+    // Realtime adjustment of browser delay node
+    if (activeSourcesRef.current[idx]) {
+      const audioCtx = audioContextRef.current;
+      const delaySec = (ms + (activeSourcesRef.current[idx].latency_ms || 0)) / 1000.0;
+      activeSourcesRef.current[idx].delayNode.delayTime.setValueAtTime(delaySec, audioCtx.currentTime);
+    }
+  };
+
+  // ── UI Control Handlers ─────────────────────────────────────────────────────
+
   const handleScan = () => {
-    setIsScanning(true);
-    send({ action: 'scan_devices' });
-    setTimeout(() => setIsScanning(false), 3000);
+    scanBrowserDevices();
   };
 
   const handleSearch = (e) => {
@@ -455,17 +880,227 @@ export default function App() {
     send({ action: 'search', query: musicQuery });
   };
 
-  const handlePlayTrack  = (track) => { send({ action: 'play_track', track }); setSearchResults([]); setMusicQuery(''); };
-  const handleTogglePlay = ()       => send({ action: isPlaying ? 'pause' : 'play' });
-  const handleStop       = ()       => send({ action: 'stop' });
-  const handleSeek       = (e)      => { const s = parseFloat(e.target.value); setProgress(s); send({ action: 'seek', seconds: s }); };
+  const handlePlayTrack = (track) => {
+    setSearchResults([]);
+    setMusicQuery('');
+    if (wsConnected) {
+      send({ action: 'play_track', track });
+    } else {
+      loadAndPlayTrackLocally(track);
+    }
+  };
 
-  const handleCalibrate = (idx) => {
+  const handleTogglePlay = () => {
+    if (wsConnected) {
+      send({ action: isPlaying ? 'pause' : 'play' });
+    } else {
+      if (!decodedBufferRef.current) return;
+      const nextPlaying = !isPlaying;
+      setIsPlaying(nextPlaying);
+      if (nextPlaying) {
+        startSourcesAt(startOffsetRef.current);
+      } else {
+        const elapsed = audioContextRef.current.currentTime - startTimeRef.current;
+        startOffsetRef.current = (startOffsetRef.current + elapsed) % decodedBufferRef.current.duration;
+        stopAllSources();
+      }
+    }
+  };
+
+  const handleStop = () => {
+    if (wsConnected) {
+      send({ action: 'stop' });
+    } else {
+      setIsPlaying(false);
+      stopAllSources();
+      startOffsetRef.current = 0;
+      setProgress(0);
+    }
+  };
+
+  const handleSeek = (e) => {
+    const s = parseFloat(e.target.value);
+    setProgress(s);
+    if (wsConnected) {
+      send({ action: 'seek', seconds: s });
+    } else {
+      startOffsetRef.current = s;
+      if (isPlaying) {
+        stopAllSources();
+        startSourcesAt(s);
+      }
+    }
+  };
+
+  // ── Browser-Native Auto Calibration ────────────────────────────────────────
+
+  const handleCalibrate = async (idx) => {
     setCalibrationStates(prev => ({
       ...prev,
       [idx]: { status: 'calibrating', latency: 0, errorMsg: '' }
     }));
-    send({ action: 'calibrate_device', index: idx });
+
+    const device = devicesRef.current.find(d => d.index === idx);
+    if (!device) return;
+
+    let audioStream = null;
+    let recContext = null;
+    let playbackContext = null;
+
+    try {
+      audioStream = await navigator.mediaDevices.getUserMedia({ 
+        audio: {
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false
+        } 
+      });
+
+      playbackContext = new (window.AudioContext || window.webkitAudioContext)();
+      const playDest = playbackContext.createMediaStreamDestination();
+      
+      const playAudio = new Audio();
+      playAudio.srcObject = playDest.stream;
+      playAudio.muted = false;
+      playAudio.volume = 1.0;
+      if (typeof playAudio.setSinkId === 'function' && device.deviceId) {
+        await playAudio.setSinkId(device.deviceId);
+      }
+      await playAudio.play();
+
+      recContext = new (window.AudioContext || window.webkitAudioContext)();
+      const recSource = recContext.createMediaStreamSource(audioStream);
+      const recNode = recContext.createScriptProcessor(4096, 1, 1);
+      
+      const recBuffer = [];
+      let isRecording = true;
+
+      recNode.onaudioprocess = (e) => {
+        if (!isRecording) return;
+        const inputData = e.inputBuffer.getChannelData(0);
+        recBuffer.push(new Float32Array(inputData));
+      };
+
+      recSource.connect(recNode);
+      recNode.connect(recContext.destination);
+
+      const wasPlaying = isPlayingRef.current;
+      if (wasPlaying) {
+        stopAllSources();
+      }
+
+      await new Promise(resolve => setTimeout(resolve, 200));
+      
+      const osc = playbackContext.createOscillator();
+      const oscGain = playbackContext.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(1000, playbackContext.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(1500, playbackContext.currentTime + 0.15);
+      
+      oscGain.gain.setValueAtTime(0, playbackContext.currentTime);
+      oscGain.gain.linearRampToValueAtTime(0.8, playbackContext.currentTime + 0.02);
+      oscGain.gain.setValueAtTime(0.8, playbackContext.currentTime + 0.13);
+      oscGain.gain.linearRampToValueAtTime(0, playbackContext.currentTime + 0.15);
+
+      osc.connect(oscGain);
+      oscGain.connect(playDest);
+
+      osc.start();
+      osc.stop(playbackContext.currentTime + 0.15);
+
+      await new Promise(resolve => setTimeout(resolve, 1200));
+
+      isRecording = false;
+      audioStream.getTracks().forEach(t => t.stop());
+      recSource.disconnect();
+      recNode.disconnect();
+      
+      let totalLength = 0;
+      for (const buf of recBuffer) {
+        totalLength += buf.length;
+      }
+      const recData = new Float32Array(totalLength);
+      let offset = 0;
+      for (const buf of recBuffer) {
+        recData.set(buf, offset);
+        offset += buf.length;
+      }
+
+      const sampleRate = recContext.sampleRate;
+      
+      const absData = new Float32Array(recData.length);
+      for (let i = 0; i < recData.length; i++) {
+        absData[i] = Math.abs(recData[i]);
+      }
+
+      const baselineSamples = Math.floor(sampleRate * 0.15);
+      let noiseSum = 0;
+      for (let i = 0; i < baselineSamples; i++) {
+        noiseSum += absData[i];
+      }
+      const noiseLevel = noiseSum / baselineSamples;
+      const threshold = Math.max(0.02, noiseLevel * 4.0);
+
+      let peakIndex = -1;
+      for (let i = baselineSamples; i < absData.length - 100; i++) {
+        if (absData[i] > threshold) {
+          let localSum = 0;
+          for (let j = 0; j < 50; j++) {
+            localSum += absData[i + j];
+          }
+          if (localSum / 50 > threshold) {
+            peakIndex = i;
+            break;
+          }
+        }
+      }
+
+      if (peakIndex !== -1) {
+        const elapsedSamples = peakIndex;
+        const recordedTimeMs = (elapsedSamples / sampleRate) * 1000.0;
+        let latency = Math.round(recordedTimeMs - 200);
+        
+        if (latency < 0) latency = 0;
+        if (latency > 800) {
+          throw new Error("Measured latency was out of bounds (> 800ms). Please ensure speakers are audible.");
+        }
+
+        console.log(`Auto Calibration Successful! Measured latency: ${latency}ms`);
+
+        setDevices(prev => prev.map(d => d.index === idx ? { ...d, latency_ms: latency, delay_ms: latency } : d));
+        
+        setCalibrationStates(prev => ({
+          ...prev,
+          [idx]: {
+            status: 'success',
+            latency: latency,
+            errorMsg: ''
+          }
+        }));
+
+        if (wasPlaying) {
+          setTimeout(() => {
+            startSourcesAt(startOffsetRef.current);
+          }, 300);
+        }
+      } else {
+        throw new Error("Could not detect the calibration chirp. Please check microphone input volume and speaker loudness.");
+      }
+
+    } catch (err) {
+      console.error("Calibration failed:", err);
+      setCalibrationStates(prev => ({
+        ...prev,
+        [idx]: {
+          status: 'error',
+          latency: 0,
+          errorMsg: err.message || "Failed to capture chirp. Please verify permissions."
+        }
+      }));
+    } finally {
+      if (playbackContext) playbackContext.close();
+      if (recContext) recContext.close();
+    }
   };
 
   const handleResetProfile = (idx) => {
@@ -474,7 +1109,7 @@ export default function App() {
       delete ns[idx];
       return ns;
     });
-    send({ action: 'reset_profile', index: idx });
+    setDevices(prev => prev.map(d => d.index === idx ? { ...d, latency_ms: 0, delay_ms: 0 } : d));
   };
 
   const handleDragOver = (e) => {
@@ -504,49 +1139,83 @@ export default function App() {
       return;
     }
 
-    const formData = new FormData();
-    formData.append("file", file);
-
-    try {
-      setUploadProgress(0);
-      
-      const urls = getBackendUrls();
-      const xhr = new XMLHttpRequest();
-      xhr.open("POST", urls.upload, true);
-      
-      xhr.upload.onprogress = (event) => {
-        if (event.lengthComputable) {
-          const pct = Math.round((event.loaded / event.total) * 100);
-          setUploadProgress(pct);
+    if (!wsConnected) {
+      const reader = new FileReader();
+      reader.onload = async (event) => {
+        try {
+          setIsLoading(true);
+          const arrayBuffer = event.target.result;
+          if (!audioContextRef.current) {
+            audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
+          }
+          const decodedBuffer = await audioContextRef.current.decodeAudioData(arrayBuffer);
+          decodedBufferRef.current = decodedBuffer;
+          
+          const localTrack = {
+            id: `local_${Date.now()}`,
+            title: file.name,
+            duration: decodedBuffer.duration,
+            uploader: "Local Browser File",
+            is_local: true,
+            thumbnail: ""
+          };
+          setCurrentTrack(localTrack);
+          currentTrackRef.current = localTrack;
+          setIsLoading(false);
+          setIsPlaying(true);
+          startSourcesAt(0);
+        } catch (err) {
+          console.error("Local decode failed:", err);
+          alert("Failed to decode local file in browser.");
+          setIsLoading(false);
         }
       };
+      reader.readAsArrayBuffer(file);
+    } else {
+      const formData = new FormData();
+      formData.append("file", file);
 
-      xhr.onload = () => {
-        try {
-          const res = JSON.parse(xhr.responseText);
-          if (res.success) {
-            setUploadProgress(null);
-          } else {
-            alert(`Upload failed: ${res.error}`);
+      try {
+        setUploadProgress(0);
+        
+        const urls = getBackendUrls();
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", urls.upload, true);
+        
+        xhr.upload.onprogress = (event) => {
+          if (event.lengthComputable) {
+            const pct = Math.round((event.loaded / event.total) * 100);
+            setUploadProgress(pct);
+          }
+        };
+
+        xhr.onload = () => {
+          try {
+            const res = JSON.parse(xhr.responseText);
+            if (res.success) {
+              setUploadProgress(null);
+            } else {
+              alert(`Upload failed: ${res.error}`);
+              setUploadProgress(null);
+            }
+          } catch (err) {
+            console.error("Upload response parse error:", err);
+            alert("Error parsing upload response.");
             setUploadProgress(null);
           }
-        } catch (err) {
-          console.error("Upload response parse error:", err);
-          alert("Error parsing upload response.");
+        };
+
+        xhr.onerror = () => {
+          alert("Network error uploading file.");
           setUploadProgress(null);
-        }
-      };
+        };
 
-      xhr.onerror = () => {
-        alert("Network error uploading file.");
+        xhr.send(formData);
+      } catch (error) {
+        console.error("Upload error:", error);
+        alert("Error initiating upload.");
         setUploadProgress(null);
-      };
-
-      xhr.send(formData);
-    } catch (error) {
-      console.error("Upload error:", error);
-      alert("Error initiating upload.");
-      setUploadProgress(null);
+      }
     }
   };
 
@@ -748,7 +1417,25 @@ export default function App() {
                       {isPlaying && <div className="art-playing-ring" />}
                     </div>
                     <div className="track-details">
-                      <h3>{currentTrack.title}</h3>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                        <h3>{currentTrack.title}</h3>
+                        {isLoading && (
+                          <span className="track-loading-badge font-mono animate-pulse" style={{
+                            fontSize: '0.68rem',
+                            background: 'rgba(255, 120, 0, 0.15)',
+                            color: 'var(--orange)',
+                            padding: '2px 6px',
+                            borderRadius: '3px',
+                            border: '1px solid rgba(255, 120, 0, 0.3)',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '4px'
+                          }}>
+                            <RefreshCw size={10} className="spinning" />
+                            DECODING...
+                          </span>
+                        )}
+                      </div>
                       <p>{currentTrack.uploader || 'Local Library File'}</p>
                       <div className={`wave ${isPlaying ? 'playing' : ''}`}>
                         {[...Array(8)].map((_, i) => (
@@ -1004,13 +1691,13 @@ export default function App() {
             ) : (
               filteredDevices.map(dev => (
                 <DeviceCard
-                  key={dev.name}
+                  key={dev.index}
                   device={dev}
                   isNew={hotPlugNames.has(dev.name) && !dev.active}
                   calibrationState={calibrationStates[dev.index]}
-                  onToggle={(idx, val) => send({ action: 'toggle_device', index: idx, active: val })}
-                  onVolume={(idx, vol) => send({ action: 'set_volume', index: idx, volume: vol })}
-                  onDelay={(idx, ms)  => send({ action: 'set_delay', index: idx, delay_ms: ms })}
+                  onToggle={handleToggleDevice}
+                  onVolume={handleVolumeChange}
+                  onDelay={handleDelayChange}
                   onCalibrate={handleCalibrate}
                   onResetProfile={handleResetProfile}
                 />
