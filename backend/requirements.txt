@@ -6,3 +6,5 @@ yt-dlp
 websockets
 pydub
 static-ffmpeg
+python-multipart
+
