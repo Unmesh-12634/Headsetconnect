@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+sounddevice
+numpy
+yt-dlp
+websockets
+pydub
+static-ffmpeg
