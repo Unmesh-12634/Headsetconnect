@@ -382,7 +382,8 @@ class AudioEngine:
                 logger.debug(f"System default playback device: {default_cleaned!r}")
         except Exception as e:
             default_cleaned = None
-            logger.warning(f"Could not query default system device: {e}")
+            if HAS_SOUNDDEVICE:
+                logger.warning(f"Could not query default system device: {e}")
 
         existing_by_name = {d.name: d for d in self.devices.values()}
         new_device_map = {}
@@ -440,7 +441,8 @@ class AudioEngine:
         
         # Only log active devices when the active set changes, during changes, or on startup
         if old_active != new_active or devices_changed or not self._startup_complete:
-            logger.info(f"Active devices: {list(new_active)}")
+            if HAS_SOUNDDEVICE:
+                logger.info(f"Active devices: {list(new_active)}")
 
     def refresh_devices_safely(self):
         """Force PortAudio cache refresh and re-scan devices.
