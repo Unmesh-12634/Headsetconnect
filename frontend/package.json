@@ -12,7 +12,7 @@
   "dependencies": {
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
-    "lucide-react": "^0.379.0"
+    "lucide-react": "^0.469.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
