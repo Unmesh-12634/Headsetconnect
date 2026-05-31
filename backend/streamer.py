@@ -19,7 +19,21 @@ except Exception as e:
 logger = logging.getLogger("Streamer")
 
 
+def find_key_recursive(data, key):
+    results = []
+    if isinstance(data, dict):
+        if key in data:
+            results.append(data[key])
+        for k, v in data.items():
+            results.extend(find_key_recursive(v, key))
+    elif isinstance(data, list):
+        for item in data:
+            results.extend(find_key_recursive(item, key))
+    return results
+
+
 class AudioStreamer:
+
     def __init__(self, audio_engine):
         self.audio_engine = audio_engine
         self.download_thread = None
@@ -51,18 +65,6 @@ class AudioStreamer:
             'skip_download': True,
         }
 
-
-def find_key_recursive(data, key):
-    results = []
-    if isinstance(data, dict):
-        if key in data:
-            results.append(data[key])
-        for k, v in data.items():
-            results.extend(find_key_recursive(v, key))
-    elif isinstance(data, list):
-        for item in data:
-            results.extend(find_key_recursive(item, key))
-    return results
 
 
     # ── YouTube search / info ────────────────────────────────────────────────
