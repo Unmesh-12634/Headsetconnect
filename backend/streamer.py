@@ -51,20 +51,93 @@ class AudioStreamer:
             'skip_download': True,
         }
 
+
+def find_key_recursive(data, key):
+    results = []
+    if isinstance(data, dict):
+        if key in data:
+            results.append(data[key])
+        for k, v in data.items():
+            results.extend(find_key_recursive(v, key))
+    elif isinstance(data, list):
+        for item in data:
+            results.extend(find_key_recursive(item, key))
+    return results
+
+
     # ── YouTube search / info ────────────────────────────────────────────────
 
     def search_youtube(self, query):
         """Search YouTube or resolve direct URL, return metadata for top matches."""
-        logger.info(f"Searching YouTube for: {query}")
+        query_str = query.strip()
+        is_url = (
+            query_str.startswith("http://")
+            or query_str.startswith("https://")
+            or "youtube.com" in query_str
+            or "youtu.be" in query_str
+        )
+        
+        if not is_url:
+            # High-speed browser emulation scraper to prevent rate limit blocks on public clouds
+            try:
+                import requests
+                import re
+                import urllib.parse
+                import json
+                
+                logger.info(f"Using high-speed scrape search for query: {query_str}")
+                url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(query_str)}"
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+                    "Accept-Language": "en-US,en;q=0.9",
+                }
+                r = requests.get(url, headers=headers, timeout=6)
+                if r.status_code == 200:
+                    pattern = r"var ytInitialData\s*=\s*({.*?});"
+                    match = re.search(pattern, r.text)
+                    if match:
+                        data = json.loads(match.group(1))
+                        video_renderers = find_key_recursive(data, "videoRenderer")
+                        results = []
+                        for video in video_renderers:
+                            video_id = video.get("videoId")
+                            if not video_id:
+                                continue
+                            title = video.get("title", {}).get("runs", [{}])[0].get("text", "Unknown Title")
+                            duration_text = video.get("lengthText", {}).get("simpleText", "0:00")
+                            
+                            duration_secs = 0
+                            try:
+                                parts = list(map(int, duration_text.split(":")))
+                                if len(parts) == 2:
+                                    duration_secs = parts[0] * 60 + parts[1]
+                                elif len(parts) == 3:
+                                    duration_secs = parts[0] * 3600 + parts[1] * 60 + parts[2]
+                            except Exception:
+                                pass
+                                
+                            uploader = video.get("ownerText", {}).get("runs", [{}])[0].get("text", "Unknown Artist")
+                            
+                            results.append({
+                                "id": video_id,
+                                "title": title,
+                                "duration": duration_secs,
+                                "uploader": uploader,
+                                "url": f"https://www.youtube.com/watch?v={video_id}",
+                                "thumbnail": f"https://img.youtube.com/vi/{video_id}/mqdefault.jpg",
+                            })
+                            if len(results) >= 5:
+                                break
+                        if results:
+                            logger.info(f"Scraper resolved {len(results)} search results instantly.")
+                            return results
+            except Exception as scraper_err:
+                logger.warning(f"High-speed scraping search failed: {scraper_err}. Falling back to yt-dlp...")
+
+        # Fallback to standard yt-dlp search/extract (direct URL resolution)
+        logger.info(f"Searching YouTube via yt-dlp: {query_str}")
         try:
             with yt_dlp.YoutubeDL(self.search_opts) as ydl:
-                query_str = query.strip()
-                is_url = (
-                    query_str.startswith("http://")
-                    or query_str.startswith("https://")
-                    or "youtube.com" in query_str
-                    or "youtu.be" in query_str
-                )
                 if is_url:
                     info = ydl.extract_info(query_str, download=False)
                     if not info:
@@ -85,7 +158,7 @@ class AudioStreamer:
                         })
                     return results
                 else:
-                    res = ydl.extract_info(f"ytsearch5:{query}", download=False)
+                    res = ydl.extract_info(f"ytsearch5:{query_str}", download=False)
                     if not res or 'entries' not in res:
                         return []
                     results = []
