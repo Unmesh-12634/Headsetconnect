@@ -1,4 +1,3 @@
-import sounddevice as sd
 import numpy as np
 import threading
 import time
@@ -9,6 +8,21 @@ import json
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("AudioEngine")
+
+# Optional sounddevice/PortAudio loading for headless cloud environments
+sd = None
+HAS_SOUNDDEVICE = False
+
+if os.getenv("HEADLESS") == "true":
+    logger.info("Running in Headless Cloud Mode. sounddevice/PortAudio bypassed entirely.")
+else:
+    try:
+        import sounddevice as sd
+        HAS_SOUNDDEVICE = True
+    except Exception as sd_err:
+        logger.warning(
+            f"sounddevice/PortAudio could not be loaded (running in headless mode?): {sd_err}"
+        )
 
 
 def clean_device_name(raw_name: str) -> str:
@@ -137,6 +151,9 @@ class AudioDevice:
 
     def _play_loop(self):
         try:
+            if not sd:
+                raise RuntimeError("sounddevice is not available in headless cloud mode.")
+
             device_index = self.index
 
             # Open output stream using native device channel support
@@ -271,16 +288,10 @@ class AudioEngine:
     # ── Device discovery ────────────────────────────────────────────────────────
 
     def get_available_devices(self):
-        """Query host system output devices, deduplicated by cleaned name.
+        """Query host system output devices, deduplicated by cleaned name. ..."""
+        if not sd:
+            return []
 
-        Windows exposes the same physical device via multiple host APIs
-        (MME, DirectSound, WASAPI, WDM-KS).  We:
-          1. Skip WDM-KS entirely — it does not support the blocking API used by
-             sounddevice (PaErrorCode -9999).
-          2. Deduplicate by cleaned name, preferring WASAPI > DirectSound > MME.
-          3. Only refresh the PortAudio cache when not playing and at least 5s
-             have elapsed since the last refresh.
-        """
         try:
             # Refresh PortAudio device cache only when idle and stale
             now = time.time()
@@ -358,6 +369,8 @@ class AudioEngine:
         sys_devices = self.get_available_devices()
 
         try:
+            if not sd:
+                raise RuntimeError("sounddevice not loaded")
             default_info = sd.query_devices(kind='output')
             default_cleaned = clean_device_name(default_info['name'])
             
@@ -585,6 +598,9 @@ class AudioEngine:
 
         Returns a dict: {"success": bool, "latency_ms": float, "confidence": float, "error": str}
         """
+        if not sd:
+            return {"success": False, "error": "Calibration is not supported in headless cloud mode."}
+
         if index not in self.devices:
             return {"success": False, "error": "Device not found."}
         dev = self.devices[index]
