@@ -28,6 +28,15 @@ def build():
         print("[ERROR] npm run build failed!")
         sys.exit(1)
     
+    # Remove any copied HeadsetConnect.exe from dist folder to prevent circular/recursive PyInstaller inclusion
+    dist_exe = os.path.join(frontend_dir, "dist", "HeadsetConnect.exe")
+    if os.path.exists(dist_exe):
+        print(f"Removing packaged executable from static dist folder: {dist_exe}")
+        try:
+            os.remove(dist_exe)
+        except Exception as e:
+            print(f"[WARNING] Could not remove {dist_exe}: {e}")
+            
     print("[OK] React frontend compiled successfully!")
 
     # 2. Check for PyInstaller
