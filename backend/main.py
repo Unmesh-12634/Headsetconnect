@@ -28,6 +28,13 @@ async def lifespan(app: FastAPI):
     main_loop = asyncio.get_running_loop()
     asyncio.create_task(progress_broadcast_loop())
     asyncio.create_task(device_watcher_loop())
+    
+    # Register Windows custom URI protocol scheme if packaged
+    try:
+        register_uri_scheme()
+    except Exception as reg_err:
+        logger.warning(f"Failed calling register_uri_scheme: {reg_err}")
+        
     logger.info("Application startup complete. Audio engine ready.")
     
     # Automatically open the browser pointing to the app's local port
@@ -71,6 +78,40 @@ else:
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
+
+def register_uri_scheme():
+    """Register custom protocol handler headsetconnect:// under HKEY_CURRENT_USER for Windows launcher.
+    Does not require admin privileges.
+    """
+    import sys
+    if sys.platform != 'win32':
+        return
+        
+    try:
+        import winreg
+        if getattr(sys, 'frozen', False):
+            exe_path = os.path.abspath(sys.executable)
+        else:
+            return
+            
+        key_path = r"Software\Classes\headsetconnect"
+        
+        # Create/open key
+        key = winreg.CreateKey(winreg.HKEY_CURRENT_USER, key_path)
+        winreg.SetValue(key, "", winreg.REG_SZ, "URL:HeadsetConnect Protocol")
+        winreg.SetValueEx(key, "URL Protocol", 0, winreg.REG_SZ, "")
+        
+        # DefaultIcon key
+        icon_key = winreg.CreateKey(key, "DefaultIcon")
+        winreg.SetValue(icon_key, "", winreg.REG_SZ, f'"{exe_path}",0')
+        
+        # shell\open\command key
+        cmd_key = winreg.CreateKey(key, r"shell\open\command")
+        winreg.SetValue(cmd_key, "", winreg.REG_SZ, f'"{exe_path}" "%1"')
+        
+        logger.info(f"Registered custom URI protocol 'headsetconnect://' to: {exe_path}")
+    except Exception as e:
+        logger.warning(f"Could not register custom URI protocol: {e}")
 
 app.add_middleware(
     CORSMiddleware,
@@ -420,4 +461,7 @@ else:
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
-    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
+    if getattr(sys, 'frozen', False):
+        uvicorn.run(app, host="0.0.0.0", port=port)
+    else:
+        uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)

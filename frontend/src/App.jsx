@@ -660,6 +660,7 @@ function SyncedVideoPlayer({ track, isPlaying, progress, latency, onClose, onTog
 
 export default function App() {
   const [wsConnected,    setWsConnected]    = useState(false);
+  const [hasDownloaded,  setHasDownloaded]  = useState(() => localStorage.getItem('hc_has_downloaded') === 'true');
   const [devices,        setDevices]        = useState([]);
   const [isPlaying,      setIsPlaying]      = useState(false);
   const [progress,       setProgress]       = useState(0);
@@ -782,6 +783,23 @@ export default function App() {
   }, [backendHost]);
 
   // ── Actions ─────────────────────────────────────────────────────────────────
+
+  const handleLaunchApp = () => {
+    localStorage.setItem('hc_has_downloaded', 'true');
+    setHasDownloaded(true);
+    window.location.href = 'headsetconnect://';
+  };
+
+  const handleDownloadApp = () => {
+    localStorage.setItem('hc_has_downloaded', 'true');
+    setHasDownloaded(true);
+    window.open("https://github.com/Unmesh-12634/Headsetconnect/releases", "_blank", "noopener,noreferrer");
+  };
+
+  const handleClearDownloadStatus = () => {
+    localStorage.removeItem('hc_has_downloaded');
+    setHasDownloaded(false);
+  };
 
   const send = (payload) => {
     if (wsRef.current?.readyState === WebSocket.OPEN)
@@ -1059,32 +1077,91 @@ export default function App() {
                   The frontend cannot communicate with the local HeadsetConnect audio engine on your computer.
                 </p>
 
-                <div style={{ fontSize: '0.75rem', border: '1px solid var(--border)', padding: '10px', borderRadius: '4px', background: 'rgba(5, 10, 20, 0.3)', marginBottom: '12px', lineHeight: '1.45' }}>
-                  <span className="text-cyan" style={{ display: 'block', marginBottom: '4px', fontWeight: 'bold' }}>&gt; ALREADY INSTALLED?</span>
-                  Double-click <code style={{color: 'var(--orange)'}}>HeadsetConnect.exe</code> on your computer to run it, then click <strong>Connect to Local System</strong> below.
-                </div>
+                {hasDownloaded ? (
+                  <>
+                    <div style={{ fontSize: '0.75rem', border: '1px solid var(--border)', padding: '10px', borderRadius: '4px', background: 'rgba(5, 10, 20, 0.3)', marginBottom: '12px', lineHeight: '1.45' }}>
+                      <span className="text-cyan" style={{ display: 'block', marginBottom: '4px', fontWeight: 'bold' }}>&gt; LAUNCH LOCAL SERVER</span>
+                      Open the app on your computer. If it's already running, make sure to click <strong>Connect to Local System</strong>.
+                    </div>
 
-                <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
-                  <button 
-                    className="btn-outline small text-cyan"
-                    style={{ fontSize: '0.72rem', padding: '5px 10px', cursor: 'pointer' }}
-                    onClick={() => {
-                      localStorage.setItem('hc_backend_host', 'localhost:8000');
-                      setBackendHost('localhost:8000');
-                    }}
-                  >
-                    Connect to Local System
-                  </button>
-                  <a 
-                    href="https://github.com/Unmesh-12634/Headsetconnect/releases" 
-                    target="_blank" 
-                    rel="noopener noreferrer"
-                    className="btn-ghost-sm text-orange font-mono"
-                    style={{ fontSize: '0.72rem', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
-                  >
-                    Download Desktop App (.exe) &gt;
-                  </a>
-                </div>
+                    <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
+                      <button 
+                        className="btn-primary small"
+                        style={{ fontSize: '0.72rem', padding: '5px 12px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '6px', backgroundColor: 'var(--cyan)', color: '#050a14', border: 'none', borderRadius: '4px', fontWeight: 'bold' }}
+                        onClick={handleLaunchApp}
+                        title="Click to launch HeadsetConnect using the custom URL protocol"
+                      >
+                        <Zap size={12} fill="#050a14" /> Launch HeadsetConnect
+                      </button>
+                      
+                      <button 
+                        className="btn-outline small text-cyan"
+                        style={{ fontSize: '0.72rem', padding: '5px 10px', cursor: 'pointer' }}
+                        onClick={() => {
+                          localStorage.setItem('hc_backend_host', 'localhost:8000');
+                          setBackendHost('localhost:8000');
+                        }}
+                      >
+                        Connect to Local System
+                      </button>
+
+                      <a 
+                        href="https://github.com/Unmesh-12634/Headsetconnect/releases" 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="btn-ghost-sm text-dim font-mono"
+                        onClick={handleDownloadApp}
+                        style={{ fontSize: '0.72rem', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                      >
+                        Download again (.exe) &gt;
+                      </a>
+
+                      <button
+                        className="btn-ghost-sm text-red font-mono"
+                        style={{ fontSize: '0.72rem', cursor: 'pointer', background: 'none', border: 'none', padding: 0 }}
+                        onClick={handleClearDownloadStatus}
+                      >
+                        Reset Status
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div style={{ fontSize: '0.75rem', border: '1px solid var(--border)', padding: '10px', borderRadius: '4px', background: 'rgba(5, 10, 20, 0.3)', marginBottom: '12px', lineHeight: '1.45' }}>
+                      <span className="text-orange" style={{ display: 'block', marginBottom: '4px', fontWeight: 'bold' }}>&gt; DESKTOP APP REQUIRED</span>
+                      You need the Windows desktop background app to route audio to your Bluetooth headsets.
+                    </div>
+
+                    <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
+                      <button 
+                        className="btn-primary small"
+                        style={{ fontSize: '0.72rem', padding: '5px 12px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '6px', backgroundColor: 'var(--orange)', color: '#050a14', border: 'none', borderRadius: '4px', fontWeight: 'bold' }}
+                        onClick={handleDownloadApp}
+                      >
+                        <Upload size={12} fill="#050a14" style={{ transform: 'rotate(180deg)' }} /> Download Desktop App (.exe)
+                      </button>
+                      
+                      <button 
+                        className="btn-outline small text-cyan"
+                        style={{ fontSize: '0.72rem', padding: '5px 10px', cursor: 'pointer' }}
+                        onClick={() => {
+                          localStorage.setItem('hc_backend_host', 'localhost:8000');
+                          setBackendHost('localhost:8000');
+                        }}
+                      >
+                        Connect to Local System
+                      </button>
+
+                      <button 
+                        className="btn-ghost-sm text-cyan font-mono"
+                        style={{ fontSize: '0.72rem', cursor: 'pointer', background: 'none', border: 'none', padding: 0 }}
+                        onClick={handleLaunchApp}
+                      >
+                        Already have it? Launch App &gt;
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
             )}
 
