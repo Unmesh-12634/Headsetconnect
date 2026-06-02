@@ -985,6 +985,19 @@ export default function App() {
           >
             {wsConnected ? <><Wifi size={12} />Connected</> : <><WifiOff size={12} />Disconnected</>}
           </span>
+          {!wsConnected && (
+            <button 
+              className="btn-outline small text-cyan animate-pulse header-connect-local-btn"
+              style={{ fontSize: '0.72rem', padding: '3px 8px', height: '24px', marginLeft: '6px', cursor: 'pointer' }}
+              onClick={() => {
+                localStorage.setItem('hc_backend_host', 'localhost:8000');
+                setBackendHost('localhost:8000');
+              }}
+              title="Connect to the backend running on your local computer (localhost:8000)"
+            >
+              Connect to Local System
+            </button>
+          )}
           <button 
             className="icon-btn small header-settings-btn"
             onClick={() => setShowSettingsModal(true)}
@@ -1035,6 +1048,38 @@ export default function App() {
 
           {/* Internal scroll body */}
           <div className="player-scroll-body" onDragOver={handleDragOver}>
+
+            {!wsConnected && (
+              <div className="connection-warning-card font-mono" style={{ marginBottom: '1.5rem', padding: '16px', border: '1px dashed var(--red)', borderRadius: '8px', background: 'rgba(255, 82, 82, 0.03)' }}>
+                <h4 className="text-red" style={{ margin: '0 0 8px 0', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.85rem' }}>
+                  <WifiOff size={14} /> Local Server Disconnected
+                </h4>
+                <p style={{ fontSize: '0.78rem', color: 'var(--text-2)', lineHeight: '1.45', margin: '0 0 12px 0' }}>
+                  The frontend cannot communicate with the local HeadsetConnect audio engine on your computer.
+                </p>
+                <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
+                  <button 
+                    className="btn-outline small text-cyan"
+                    style={{ fontSize: '0.72rem', padding: '4px 8px', cursor: 'pointer' }}
+                    onClick={() => {
+                      localStorage.setItem('hc_backend_host', 'localhost:8000');
+                      setBackendHost('localhost:8000');
+                    }}
+                  >
+                    Connect to Local System (localhost:8000)
+                  </button>
+                  <a 
+                    href="https://github.com/Unmesh-12634/Headsetconnect/releases" 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    className="text-orange font-mono"
+                    style={{ fontSize: '0.72rem', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                  >
+                    Download Installer &gt;
+                  </a>
+                </div>
+              </div>
+            )}
 
             {/* YouTube Search */}
             <div className="search-section-hud" style={{ marginTop: 0 }}>
