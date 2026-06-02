@@ -1054,28 +1054,35 @@ export default function App() {
                 <h4 className="text-red" style={{ margin: '0 0 8px 0', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.85rem' }}>
                   <WifiOff size={14} /> Local Server Disconnected
                 </h4>
-                <p style={{ fontSize: '0.78rem', color: 'var(--text-2)', lineHeight: '1.45', margin: '0 0 12px 0' }}>
+                
+                <p style={{ fontSize: '0.78rem', color: 'var(--text-2)', lineHeight: '1.45', margin: '0 0 10px 0' }}>
                   The frontend cannot communicate with the local HeadsetConnect audio engine on your computer.
                 </p>
+
+                <div style={{ fontSize: '0.75rem', border: '1px solid var(--border)', padding: '10px', borderRadius: '4px', background: 'rgba(5, 10, 20, 0.3)', marginBottom: '12px', lineHeight: '1.45' }}>
+                  <span className="text-cyan" style={{ display: 'block', marginBottom: '4px', fontWeight: 'bold' }}>&gt; ALREADY INSTALLED?</span>
+                  Double-click <code style={{color: 'var(--orange)'}}>HeadsetConnect.exe</code> on your computer to run it, then click <strong>Connect to Local System</strong> below.
+                </div>
+
                 <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
                   <button 
                     className="btn-outline small text-cyan"
-                    style={{ fontSize: '0.72rem', padding: '4px 8px', cursor: 'pointer' }}
+                    style={{ fontSize: '0.72rem', padding: '5px 10px', cursor: 'pointer' }}
                     onClick={() => {
                       localStorage.setItem('hc_backend_host', 'localhost:8000');
                       setBackendHost('localhost:8000');
                     }}
                   >
-                    Connect to Local System (localhost:8000)
+                    Connect to Local System
                   </button>
                   <a 
                     href="https://github.com/Unmesh-12634/Headsetconnect/releases" 
                     target="_blank" 
                     rel="noopener noreferrer"
-                    className="text-orange font-mono"
+                    className="btn-ghost-sm text-orange font-mono"
                     style={{ fontSize: '0.72rem', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
                   >
-                    Download Installer &gt;
+                    Download Desktop App (.exe) &gt;
                   </a>
                 </div>
               </div>

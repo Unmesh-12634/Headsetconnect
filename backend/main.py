@@ -29,6 +29,19 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(progress_broadcast_loop())
     asyncio.create_task(device_watcher_loop())
     logger.info("Application startup complete. Audio engine ready.")
+    
+    # Automatically open the browser pointing to the app's local port
+    async def open_browser_delayed():
+        await asyncio.sleep(1.0)
+        try:
+            import webbrowser
+            port = int(os.getenv("PORT", 8000))
+            webbrowser.open(f"http://localhost:{port}")
+        except Exception as browser_err:
+            logger.warning(f"Could not automatically open web browser: {browser_err}")
+            
+    asyncio.create_task(open_browser_delayed())
+    
     yield
     # Shutdown: stop all audio cleanly
     audio_engine.pause()
