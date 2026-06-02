@@ -793,7 +793,7 @@ export default function App() {
   const handleDownloadApp = () => {
     localStorage.setItem('hc_has_downloaded', 'true');
     setHasDownloaded(true);
-    window.open("https://github.com/Unmesh-12634/Headsetconnect/releases", "_blank", "noopener,noreferrer");
+    window.location.href = "https://github.com/Unmesh-12634/Headsetconnect/releases/latest/download/HeadsetConnect.exe";
   };
 
   const handleClearDownloadStatus = () => {
@@ -1106,7 +1106,7 @@ export default function App() {
                       </button>
 
                       <a 
-                        href="https://github.com/Unmesh-12634/Headsetconnect/releases" 
+                        href="https://github.com/Unmesh-12634/Headsetconnect/releases/latest/download/HeadsetConnect.exe" 
                         target="_blank" 
                         rel="noopener noreferrer"
                         className="btn-ghost-sm text-dim font-mono"
