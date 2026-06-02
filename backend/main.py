@@ -2,7 +2,6 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import StreamingResponse
 import uvicorn
 import asyncio
 import json
@@ -40,7 +39,23 @@ app = FastAPI(title="HeadsetConnect API", lifespan=lifespan)
 
 # ── Static files & CORS ──────────────────────────────────────────────────────
 
-UPLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads")
+import sys
+
+# Determine base paths for packaged (frozen) vs development execution
+if getattr(sys, 'frozen', False):
+    # Running inside PyInstaller bundle (executable directory for user data)
+    BASE_DIR = os.path.dirname(sys.executable)
+    # The static files are bundled inside _MEIPASS
+    BUNDLE_DIR = sys._MEIPASS
+    UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
+    frontend_dist = os.path.join(BUNDLE_DIR, "frontend", "dist")
+else:
+    # Running in development mode
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    BUNDLE_DIR = os.path.dirname(BASE_DIR)
+    UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
+    frontend_dist = os.path.join(BUNDLE_DIR, "frontend", "dist")
+
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
@@ -92,6 +107,7 @@ async def upload_audio_file(file: UploadFile = File(...)):
                 logger.error(f"ffprobe fallback failed: {ffprobe_err}")
                 duration = 180.0  # default 3 min
 
+        is_video = file_ext.lower() in [".mp4", ".webm", ".mkv", ".mov", ".avi", ".flv", ".3gp", ".mpeg", ".mpg"]
         track_info = {
             "id": f"local_{int(time.time() * 1000)}",
             "title": file.filename,
@@ -102,6 +118,7 @@ async def upload_audio_file(file: UploadFile = File(...)):
             "thumbnail": "",
             "is_local": True,
             "local_path": file_path,
+            "is_video": is_video,
         }
         streamer.library.append(track_info)
         await manager.broadcast(get_system_state())
@@ -109,36 +126,6 @@ async def upload_audio_file(file: UploadFile = File(...)):
 
     except Exception as e:
         logger.error(f"Error handling upload: {e}")
-        return {"success": False, "error": str(e)}
-
-
-@app.get("/api/stream")
-def stream_audio(url: str):
-    """Secure CORS-enabled HTTP proxy endpoint to stream direct YouTube audio to the browser.
-    Ensures that the browser is bypassed from YouTube CDN's strict origin headers.
-    """
-    try:
-        logger.info(f"Received stream request for: {url}")
-        
-        # Resolve YouTube direct stream URL
-        full_info = streamer.get_track_info(url)
-        if not full_info or not full_info.get("stream_url"):
-            logger.error("Could not resolve stream URL for: %s", url)
-            return {"success": False, "error": "Could not resolve YouTube stream URL."}
-            
-        stream_url = full_info["stream_url"]
-        headers = full_info.get("http_headers", {})
-        
-        # Proxy YouTube's chunked audio data to the browser
-        def generate():
-            import requests
-            r = requests.get(stream_url, headers=headers, stream=True)
-            for chunk in r.iter_content(chunk_size=1024 * 64):
-                yield chunk
-                
-        return StreamingResponse(generate(), media_type="audio/webm")
-    except Exception as e:
-        logger.error(f"Error proxying audio stream: {e}")
         return {"success": False, "error": str(e)}
 
 
@@ -408,6 +395,14 @@ async def websocket_endpoint(websocket: WebSocket):
 @app.get("/health")
 def health_check():
     return {"status": "ok", "devices_count": len(audio_engine.devices)}
+
+
+# Serve compiled React frontend if the folder exists (for standalone desktop mode)
+if os.path.exists(frontend_dist):
+    app.mount("/", StaticFiles(directory=frontend_dist, html=True), name="frontend")
+    logger.info(f"Mounted built React frontend from: {frontend_dist}")
+else:
+    logger.warning(f"React frontend build folder not found at: {frontend_dist}. Running in API-only mode.")
 
 
 if __name__ == "__main__":

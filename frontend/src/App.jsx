@@ -27,6 +27,10 @@ import {
   Plus,
   Upload,
   GripVertical,
+  Video,
+  Tv,
+  Maximize,
+  Minimize,
 } from 'lucide-react';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -36,6 +40,46 @@ const formatTime = (secs) => {
   const m = Math.floor(secs / 60);
   const s = Math.floor(secs % 60);
   return `${m}:${s < 10 ? '0' : ''}${s}`;
+};
+
+const hasVideoSupport = (track) => {
+  if (!track) return false;
+  if (!track.is_local) return true;
+  if (track.is_video) return true;
+  const ext = (track.title || '').split('.').pop().toLowerCase();
+  return ['mp4', 'webm', 'mkv', 'mov', 'avi', 'flv', '3gp', 'mpeg', 'mpg'].includes(ext);
+};
+
+const getYouTubeId = (url) => {
+  if (!url) return null;
+  const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=)([^#\&\?]*).*/;
+  const match = url.match(regExp);
+  return (match && match[2].length === 11) ? match[2] : null;
+};
+
+let ytApiPromise = null;
+const loadYTApi = () => {
+  if (ytApiPromise) return ytApiPromise;
+  ytApiPromise = new Promise((resolve) => {
+    if (window.YT && window.YT.Player) {
+      resolve(window.YT);
+      return;
+    }
+    const existingScript = document.querySelector('script[src="https://www.youtube.com/iframe_api"]');
+    if (!existingScript) {
+      const tag = document.createElement('script');
+      tag.src = "https://www.youtube.com/iframe_api";
+      const firstScriptTag = document.getElementsByTagName('script')[0];
+      firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
+    }
+    const checkYT = setInterval(() => {
+      if (window.YT && window.YT.Player) {
+        clearInterval(checkYT);
+        resolve(window.YT);
+      }
+    }, 100);
+  });
+  return ytApiPromise;
 };
 
 const getConnectionIcon = (type) => {
@@ -58,21 +102,31 @@ const getConnectionColor = (type) => {
   }
 };
 
-const getBackendUrls = () => {
-  const hostname = window.location.hostname;
-  const isLocal = hostname === 'localhost' || hostname === '127.0.0.1' || hostname.startsWith('192.168.') || !hostname;
+// Get initially resolved backend host (host:port or domain)
+const getInitialBackendHost = () => {
+  const saved = localStorage.getItem('hc_backend_host');
+  if (saved) return saved;
+
+  const isLocalhost = window.location.hostname === 'localhost' || 
+                      window.location.hostname === '127.0.0.1' || 
+                      window.location.hostname.startsWith('192.168.') || 
+                      window.location.hostname.startsWith('10.') || 
+                      window.location.hostname.startsWith('172.');
   
-  if (isLocal) {
-    return {
-      ws: `ws://${hostname || 'localhost'}:8000/ws`,
-      upload: `http://${hostname || 'localhost'}:8000/api/upload`
-    };
-  } else {
-    return {
-      ws: `wss://headsetconnect.onrender.com/ws`,
-      upload: `https://headsetconnect.onrender.com/api/upload`
-    };
+  if (isLocalhost) {
+    return `${window.location.hostname}:8000`;
   }
+  return 'localhost:8000'; // Default fallback for cloud instances (e.g. Vercel)
+};
+
+// Rewrite local media source URLs dynamically if connecting to a remote backend host
+const getLocalVideoSrc = (track, backendHost) => {
+  if (!track || !track.url) return '';
+  if (track.is_local && track.url.includes('/uploads/')) {
+    const filename = track.url.split('/uploads/').pop();
+    return `http://${backendHost}/uploads/${filename}`;
+  }
+  return track.url;
 };
 
 // ─── DeviceCard ───────────────────────────────────────────────────────────────
@@ -326,6 +380,282 @@ function DeviceCard({ device, isNew, calibrationState, onToggle, onVolume, onDel
   );
 }
 
+// ─── SyncedVideoPlayer ───────────────────────────────────────────────────────
+
+function SyncedVideoPlayer({ track, isPlaying, progress, latency, onClose, onTogglePlay, onSeek, backendHost }) {
+  const isYouTube = !track.is_local;
+  const videoRef = useRef(null);
+  const containerRef = useRef(null);
+  
+  const [ytPlayer, setYtPlayer] = useState(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isLagging, setIsLagging] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
+
+  // Target time for the video player (adjusted for headset latency)
+  const videoTargetTime = Math.max(0, progress - (latency / 1000.0));
+
+  useEffect(() => {
+    const handleFsChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+    document.addEventListener('fullscreenchange', handleFsChange);
+    return () => document.removeEventListener('fullscreenchange', handleFsChange);
+  }, []);
+
+  const toggleFullscreen = () => {
+    const el = containerRef.current;
+    if (!el) return;
+    if (!document.fullscreenElement) {
+      el.requestFullscreen().catch(err => {
+        console.error("Fullscreen request failed:", err);
+      });
+    } else {
+      document.exitFullscreen();
+    }
+  };
+
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA') {
+        return;
+      }
+      switch (e.key.toLowerCase()) {
+        case ' ':
+          e.preventDefault();
+          onTogglePlay();
+          break;
+        case 'arrowleft':
+          e.preventDefault();
+          onSeek(Math.max(0, progress - 10));
+          break;
+        case 'arrowright':
+          e.preventDefault();
+          onSeek(Math.min(track.duration || 100, progress + 10));
+          break;
+        case 'f':
+          e.preventDefault();
+          toggleFullscreen();
+          break;
+        default:
+          break;
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [progress, track.duration, onTogglePlay, onSeek]);
+
+  useEffect(() => {
+    if (isYouTube) return;
+    const video = videoRef.current;
+    if (!video) return;
+
+    if (isPlaying) {
+      video.play().catch(err => console.log("Local video playback blocked:", err));
+    } else {
+      video.pause();
+    }
+  }, [isPlaying, isYouTube]);
+
+  useEffect(() => {
+    if (isYouTube) return;
+    const video = videoRef.current;
+    if (!video) return;
+
+    const diff = Math.abs(video.currentTime - videoTargetTime);
+    if (diff > 0.4) {
+      video.currentTime = videoTargetTime;
+      setIsLagging(true);
+      const timer = setTimeout(() => setIsLagging(false), 300);
+      return () => clearTimeout(timer);
+    }
+  }, [videoTargetTime, isYouTube]);
+
+  useEffect(() => {
+    if (!isYouTube) return;
+    const videoId = getYouTubeId(track.url);
+    if (!videoId) return;
+
+    let playerInstance = null;
+    let destroyed = false;
+
+    loadYTApi().then((YT) => {
+      if (destroyed) return;
+      
+      playerInstance = new YT.Player('yt-player-target', {
+        height: '100%',
+        width: '100%',
+        videoId: videoId,
+        playerVars: {
+          autoplay: isPlaying ? 1 : 0,
+          controls: 0,
+          disablekb: 1,
+          fs: 0,
+          rel: 0,
+          showinfo: 0,
+          iv_load_policy: 3,
+          modestbranding: 1
+        },
+        events: {
+          onReady: (event) => {
+            if (destroyed) {
+              event.target.destroy();
+              return;
+            }
+            event.target.mute();
+            event.target.seekTo(videoTargetTime, true);
+            if (isPlaying) {
+              event.target.playVideo();
+            } else {
+              event.target.pauseVideo();
+            }
+            setYtPlayer(event.target);
+          }
+        }
+      });
+    });
+
+    return () => {
+      destroyed = true;
+      if (playerInstance && typeof playerInstance.destroy === 'function') {
+        try {
+          playerInstance.destroy();
+        } catch (e) {
+          console.error("Error destroying YT player:", e);
+        }
+      }
+      setYtPlayer(null);
+    };
+  }, [track.url, isYouTube]);
+
+  useEffect(() => {
+    if (!isYouTube || !ytPlayer) return;
+    try {
+      const state = ytPlayer.getPlayerState();
+      if (isPlaying && state !== 1) {
+        ytPlayer.playVideo();
+      } else if (!isPlaying && state === 1) {
+        ytPlayer.pauseVideo();
+      }
+    } catch (e) {
+      console.warn("YouTube playState sync error:", e);
+    }
+  }, [isPlaying, ytPlayer, isYouTube]);
+
+  useEffect(() => {
+    if (!isYouTube || !ytPlayer) return;
+    try {
+      const ytTime = ytPlayer.getCurrentTime();
+      const diff = Math.abs(ytTime - videoTargetTime);
+      if (diff > 0.4) {
+        ytPlayer.seekTo(videoTargetTime, true);
+        setIsLagging(true);
+        const timer = setTimeout(() => setIsLagging(false), 300);
+        return () => clearTimeout(timer);
+      }
+    } catch (e) {
+      console.warn("YouTube progress sync error:", e);
+    }
+  }, [videoTargetTime, ytPlayer, isYouTube]);
+
+  const handleSliderSeek = (e) => {
+    const time = parseFloat(e.target.value);
+    onSeek(time);
+  };
+
+  const sliderPercent = ((videoTargetTime / (track.duration || 100)) * 100);
+
+  return (
+    <div className="video-overlay-backdrop">
+      <div className="video-theater-container" ref={containerRef}>
+        <div className="video-theater-header">
+          <div className="video-title-wrap">
+            <Tv size={16} className="text-cyan" />
+            <h3>{track.title}</h3>
+          </div>
+          <button className="btn-ghost-sm" onClick={onClose}>Close Theater</button>
+        </div>
+
+        <div className="video-theater-body">
+          {isYouTube ? (
+            <div id="yt-player-target" className="video-player-node"></div>
+          ) : (
+            <video
+              ref={videoRef}
+              src={getLocalVideoSrc(track, backendHost)}
+              className="video-player-node"
+              muted
+              playsInline
+            />
+          )}
+
+          {/* Clickable area for play/pause toggle */}
+          <div className="video-click-detector" onClick={onTogglePlay} />
+
+          <div className="video-hud-overlay">
+            <div className="video-hud-top">
+              <span className={`sync-status-indicator ${isLagging ? 'lagging' : ''}`}>
+                {isLagging ? 'Syncing...' : 'Muted - Headsets Synced'}
+              </span>
+            </div>
+
+            {/* Video Controls HUD */}
+            <div className="video-hud-controls-container">
+              {/* Timeline Scrubber */}
+              <div className="video-hud-timeline-row">
+                <div className="custom-slider-container">
+                  <div className="custom-slider-track" />
+                  <div 
+                    className={`custom-slider-fill ${isDragging ? '' : 'animated'}`} 
+                    style={{ width: `${sliderPercent}%` }} 
+                  />
+                  <div 
+                    className={`custom-slider-thumb ${isDragging ? '' : 'animated'}`} 
+                    style={{ left: `${sliderPercent}%` }} 
+                  />
+                  <input
+                    type="range"
+                    min="0"
+                    max={track.duration || 100}
+                    value={videoTargetTime}
+                    onMouseDown={() => setIsDragging(true)}
+                    onMouseUp={() => setIsDragging(false)}
+                    onTouchStart={() => setIsDragging(true)}
+                    onTouchEnd={() => setIsDragging(false)}
+                    onChange={handleSliderSeek}
+                    className="transparent-range"
+                  />
+                </div>
+              </div>
+
+              <div className="video-hud-actions-row">
+                <div className="video-hud-left-actions">
+                  <button className="video-hud-icon-btn" onClick={onTogglePlay} title={isPlaying ? 'Pause' : 'Play'}>
+                    {isPlaying ? <Pause size={16} fill="var(--text-1)" /> : <Play size={16} fill="var(--text-1)" />}
+                  </button>
+                  <span className="video-hud-time font-mono">
+                    {formatTime(videoTargetTime)} / {formatTime(track.duration)}
+                  </span>
+                </div>
+
+                <div className="video-hud-right-actions">
+                  <button className="video-hud-icon-btn" onClick={toggleFullscreen} title={isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}>
+                    {isFullscreen ? <Minimize size={16} /> : <Maximize size={16} />}
+                  </button>
+                  <button className="video-hud-icon-btn close-btn" onClick={onClose} title="Close Theater">
+                    <span>Close</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── App ──────────────────────────────────────────────────────────────────────
 
 export default function App() {
@@ -351,117 +681,36 @@ export default function App() {
   const [library,        setLibrary]        = useState([]);
   const [uploadProgress, setUploadProgress] = useState(null);
   const [isDraggingFile, setIsDraggingFile] = useState(false);
+  const [showVideo,      setShowVideo]      = useState(false);
 
   const [draggingIndex, setDraggingIndex] = useState(null);
-  const [swipeStates, setSwipeStates] = useState({}); // { trackId: translateX }
 
-  const [isLoading,      setIsLoading]      = useState(false);
+  const [backendHost, setBackendHost] = useState(getInitialBackendHost);
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [tempHost, setTempHost] = useState(backendHost);
+
+  useEffect(() => {
+    if (showSettingsModal) {
+      setTempHost(backendHost);
+    }
+  }, [showSettingsModal, backendHost]);
+
+  useEffect(() => {
+    if (currentTrack && !hasVideoSupport(currentTrack)) {
+      setShowVideo(false);
+    }
+  }, [currentTrack]);
+  const [swipeStates, setSwipeStates] = useState({}); // { trackId: translateX }
 
   const wsRef        = useRef(null);
   const reconnectRef = useRef(null);
   const touchStartRef = useRef(null);
 
-  // Web Audio Refs
-  const audioContextRef = useRef(null);
-  const decodedBufferRef = useRef(null);
-  const activeSourcesRef = useRef({}); // index -> { sourceNode, delayNode, gainNode, audioElement }
-  const startTimeRef = useRef(0);
-  const startOffsetRef = useRef(0);
-  const progressIntervalRef = useRef(null);
-  const currentTrackRef = useRef(null);
-  const isPlayingRef = useRef(false);
-  const devicesRef = useRef([]);
-
-  useEffect(() => {
-    isPlayingRef.current = isPlaying;
-  }, [isPlaying]);
-
-  useEffect(() => {
-    devicesRef.current = devices;
-  }, [devices]);
-
   // ── WebSocket ───────────────────────────────────────────────────────────────
-
-  // Dynamic Web Audio Output & Device Discovery
-  const scanBrowserDevices = async () => {
-    try {
-      setIsScanning(true);
-      let stream;
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      } catch (permErr) {
-        console.warn("Microphone permission denied or not available:", permErr);
-      }
-
-      const allDevices = await navigator.mediaDevices.enumerateDevices();
-      
-      if (stream) {
-        stream.getTracks().forEach(track => track.stop());
-      }
-
-      const outputDevices = allDevices.filter(d => d.kind === 'audiooutput');
-      
-      const mapped = outputDevices.map((d, idx) => {
-        const name = d.label || `Output Device ${idx + 1}`;
-        let connection_type = 'Wired';
-        const lowercaseLabel = name.toLowerCase();
-        if (lowercaseLabel.includes('bluetooth') || lowercaseLabel.includes('pods') || lowercaseLabel.includes('buds') || lowercaseLabel.includes('freebuds') || lowercaseLabel.includes('wireless')) {
-          connection_type = 'Bluetooth';
-        } else if (lowercaseLabel.includes('usb')) {
-          connection_type = 'USB';
-        } else if (lowercaseLabel.includes('speaker') || lowercaseLabel.includes('directsound') || lowercaseLabel.includes('realtek')) {
-          connection_type = 'Speaker';
-        }
-
-        // Preserve volume and delay if already scanned previously
-        const existing = devicesRef.current.find(ed => ed.index === d.deviceId);
-        return {
-          index: d.deviceId || String(idx),
-          name: name,
-          volume: existing ? existing.volume : 1.0,
-          delay_ms: existing ? existing.delay_ms : 0.0,
-          latency_ms: existing ? existing.latency_ms : 0.0,
-          active: existing ? existing.active : false,
-          connection_type: connection_type,
-          deviceId: d.deviceId
-        };
-      });
-
-      setDevices(mapped);
-      setIsScanning(false);
-    } catch (err) {
-      console.error("Error scanning browser output devices:", err);
-      setIsScanning(false);
-    }
-  };
-
-  useEffect(() => {
-    scanBrowserDevices();
-
-    const handleDeviceChange = () => {
-      console.log("Media devices changed, scanning output devices...");
-      scanBrowserDevices();
-    };
-
-    if (navigator.mediaDevices) {
-      navigator.mediaDevices.addEventListener('devicechange', handleDeviceChange);
-    }
-
-    return () => {
-      if (navigator.mediaDevices) {
-        navigator.mediaDevices.removeEventListener('devicechange', handleDeviceChange);
-      }
-      stopAllSources();
-      if (progressIntervalRef.current) {
-        clearInterval(progressIntervalRef.current);
-      }
-    };
-  }, []);
 
   useEffect(() => {
     function connectWebSocket() {
-      const urls = getBackendUrls();
-      const ws = new WebSocket(urls.ws);
+      const ws = new WebSocket(`ws://${backendHost}/ws`);
       wsRef.current = ws;
 
       ws.onopen = () => {
@@ -472,92 +721,48 @@ export default function App() {
         try {
           const msg = JSON.parse(evt.data);
           if (msg.type === 'state_update') {
+            const incoming = msg.devices || [];
+            setDevices(prev => {
+              const prevNames = new Set(prev.map(d => d.name));
+              const added     = incoming.filter(d => !prevNames.has(d.name));
+
+              if (added.length > 0 && initialLoadDone.current) {
+                // Hot-plug: device arrived after the app was already running
+                setHotPlugNames(s => { const ns = new Set(s); added.forEach(d => ns.add(d.name)); return ns; });
+                setNewDeviceAlert(`New device available: ${added.map(d => d.name).join(', ')}`);
+                setTimeout(() => setNewDeviceAlert(null), 5000);
+              }
+
+              if (!initialLoadDone.current && incoming.length > 0) {
+                initialLoadDone.current = true;
+              }
+              return incoming;
+            });
+            setIsPlaying(msg.is_playing);
+            setProgress(msg.progress || 0);
+            setCurrentTrack(msg.current_track);
+            setIsScanning(false);
+
+            // Play Queue, Local Library
             if (msg.queue !== undefined) setQueue(msg.queue || []);
             if (msg.library !== undefined) setLibrary(msg.library || []);
-
-            const isNewTrack = !currentTrackRef.current || (msg.current_track && currentTrackRef.current.id !== msg.current_track.id);
-            const isNoTrack = !msg.current_track;
-
-            if (isNoTrack) {
-              if (currentTrackRef.current) {
-                stopAllSources();
-                decodedBufferRef.current = null;
-                currentTrackRef.current = null;
-                setCurrentTrack(null);
-                setProgress(0);
-                startOffsetRef.current = 0;
-              }
-            } else if (isNewTrack) {
-              currentTrackRef.current = msg.current_track;
-              setCurrentTrack(msg.current_track);
-              
-              setIsLoading(true);
-              stopAllSources();
-              startOffsetRef.current = msg.progress || 0;
-              setProgress(msg.progress || 0);
-
-              const baseUrl = getBackendUrls().upload.replace('/api/upload', '');
-              let finalStreamUrl = msg.current_track.is_local ? msg.current_track.stream_url : `${baseUrl}/api/stream?url=${encodeURIComponent(msg.current_track.url)}`;
-              if (msg.current_track.is_local) {
-                const hostname = window.location.hostname;
-                const isLocal = hostname === 'localhost' || hostname === '127.0.0.1' || hostname.startsWith('192.168.') || !hostname;
-                if (!isLocal) {
-                  finalStreamUrl = finalStreamUrl.replace('http://localhost:8000', 'https://headsetconnect.onrender.com');
-                }
-              }
-
-              fetch(finalStreamUrl)
-                .then(res => {
-                  if (!res.ok) throw new Error("Audio stream proxy returned non-200");
-                  return res.arrayBuffer();
-                })
-                .then(arrayBuffer => {
-                  if (!audioContextRef.current) {
-                    audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
-                  }
-                  return audioContextRef.current.decodeAudioData(arrayBuffer);
-                })
-                .then(decodedBuffer => {
-                  decodedBufferRef.current = decodedBuffer;
-                  setIsLoading(false);
-                  
-                  if (isPlayingRef.current) {
-                    startSourcesAt(startOffsetRef.current);
-                  }
-                })
-                .catch(err => {
-                  console.error("Failed to fetch/decode track:", err);
-                  setIsLoading(false);
-                });
-            }
-
-            if (msg.is_playing !== undefined) {
-              const wasPlaying = isPlayingRef.current;
-              setIsPlaying(msg.is_playing);
-
-              if (msg.is_playing) {
-                const currentPos = startOffsetRef.current;
-                const progressDiff = Math.abs((msg.progress || 0) - currentPos);
-
-                if (!wasPlaying || progressDiff > 1.5) {
-                  startOffsetRef.current = msg.progress || 0;
-                  if (decodedBufferRef.current && !isLoading) {
-                    startSourcesAt(msg.progress || 0);
-                  }
-                }
-              } else {
-                if (wasPlaying) {
-                  stopAllSources();
-                  startOffsetRef.current = msg.progress || 0;
-                  setProgress(msg.progress || 0);
-                }
-              }
-            }
-
-            setIsScanning(false);
           } else if (msg.type === 'search_results') {
             setSearchResults(msg.results || []);
             setIsSearching(false);
+          } else if (msg.type === 'calibration_result') {
+            const idx = msg.index;
+            setCalibrationStates(prev => ({
+              ...prev,
+              [idx]: msg.success ? {
+                status: 'success',
+                latency: msg.latency_ms,
+                errorMsg: ''
+              } : {
+                status: 'error',
+                latency: 0,
+                errorMsg: msg.error || 'Calibration failed.'
+              }
+            }));
           }
         } catch (e) {
           console.error('WS parse error:', e);
@@ -574,7 +779,7 @@ export default function App() {
 
     connectWebSocket();
     return () => { wsRef.current?.close(); clearTimeout(reconnectRef.current); };
-  }, []);
+  }, [backendHost]);
 
   // ── Actions ─────────────────────────────────────────────────────────────────
 
@@ -583,294 +788,10 @@ export default function App() {
       wsRef.current.send(JSON.stringify(payload));
   };
 
-
-  // ── Web Audio Routing & Sync Engine ─────────────────────────────────────────
-
-  const startSourcesAt = (offset) => {
-    if (!decodedBufferRef.current) return;
-    
-    const audioCtx = audioContextRef.current;
-    const buffer = decodedBufferRef.current;
-    
-    stopAllSources();
-    
-    const activeDevices = devicesRef.current.filter(d => d.active);
-    if (activeDevices.length === 0) {
-      console.warn("No active audio output devices selected.");
-      return;
-    }
-    
-    const startTime = audioCtx.currentTime + 0.05; // 50ms scheduling buffer
-    startTimeRef.current = startTime - offset;
-    
-    const newActiveSources = {};
-    
-    activeDevices.forEach(device => {
-      try {
-        const sourceNode = audioCtx.createBufferSource();
-        sourceNode.buffer = buffer;
-        
-        const delayNode = audioCtx.createDelay(2.0);
-        const totalDelaySec = (device.delay_ms + (device.latency_ms || 0)) / 1000.0;
-        delayNode.delayTime.setValueAtTime(totalDelaySec, audioCtx.currentTime);
-        
-        const gainNode = audioCtx.createGain();
-        gainNode.gain.setValueAtTime(device.volume, audioCtx.currentTime);
-        
-        const destNode = audioCtx.createMediaStreamDestination();
-        
-        sourceNode.connect(delayNode);
-        delayNode.connect(gainNode);
-        gainNode.connect(destNode);
-        
-        const audioEl = new Audio();
-        audioEl.srcObject = destNode.stream;
-        audioEl.muted = false;
-        audioEl.volume = 1.0;
-        
-        if (typeof audioEl.setSinkId === 'function' && device.deviceId) {
-          audioEl.setSinkId(device.deviceId).catch(err => {
-            console.error(`Failed to set sink ID for device: ${device.name}`, err);
-          });
-        }
-        
-        audioEl.play().catch(err => {
-          console.error("Audio element failed to play:", err);
-        });
-        
-        sourceNode.start(startTime, offset);
-        
-        newActiveSources[device.index] = {
-          sourceNode,
-          delayNode,
-          gainNode,
-          audioElement: audioEl,
-          destNode
-        };
-      } catch (err) {
-        console.error(`Failed to initialize Web Audio pipeline for device: ${device.name}`, err);
-      }
-    });
-    
-    activeSourcesRef.current = newActiveSources;
-    
-    if (progressIntervalRef.current) {
-      clearInterval(progressIntervalRef.current);
-    }
-    progressIntervalRef.current = setInterval(() => {
-      if (audioContextRef.current && isPlayingRef.current && decodedBufferRef.current) {
-        const elapsed = audioContextRef.current.currentTime - startTimeRef.current;
-        const currentPos = Math.min(decodedBufferRef.current.duration, elapsed);
-        setProgress(currentPos);
-        
-        if (elapsed >= decodedBufferRef.current.duration) {
-          clearInterval(progressIntervalRef.current);
-          handleTrackFinished();
-        }
-      }
-    }, 250);
-  };
-
-  const stopAllSources = () => {
-    if (progressIntervalRef.current) {
-      clearInterval(progressIntervalRef.current);
-    }
-    
-    if (activeSourcesRef.current) {
-      Object.keys(activeSourcesRef.current).forEach(idx => {
-        const activeSrc = activeSourcesRef.current[idx];
-        try {
-          activeSrc.sourceNode.stop();
-          activeSrc.sourceNode.disconnect();
-        } catch (e) {}
-        try {
-          activeSrc.delayNode.disconnect();
-          activeSrc.gainNode.disconnect();
-        } catch (e) {}
-        if (activeSrc.audioElement) {
-          try {
-            activeSrc.audioElement.pause();
-            activeSrc.audioElement.srcObject = null;
-          } catch (e) {}
-        }
-      });
-      activeSourcesRef.current = {};
-    }
-  };
-
-  const startDevicePlayback = (idx, offset) => {
-    const device = devicesRef.current.find(d => d.index === idx);
-    if (!device || !decodedBufferRef.current) return;
-    
-    const audioCtx = audioContextRef.current;
-    const buffer = decodedBufferRef.current;
-    
-    try {
-      const sourceNode = audioCtx.createBufferSource();
-      sourceNode.buffer = buffer;
-      
-      const delayNode = audioCtx.createDelay(2.0);
-      const totalDelaySec = (device.delay_ms + (device.latency_ms || 0)) / 1000.0;
-      delayNode.delayTime.setValueAtTime(totalDelaySec, audioCtx.currentTime);
-      
-      const gainNode = audioCtx.createGain();
-      gainNode.gain.setValueAtTime(device.volume, audioCtx.currentTime);
-      
-      const destNode = audioCtx.createMediaStreamDestination();
-      
-      sourceNode.connect(delayNode);
-      delayNode.connect(gainNode);
-      gainNode.connect(destNode);
-      
-      const audioEl = new Audio();
-      audioEl.srcObject = destNode.stream;
-      audioEl.muted = false;
-      audioEl.volume = 1.0;
-      
-      if (typeof audioEl.setSinkId === 'function' && device.deviceId) {
-        audioEl.setSinkId(device.deviceId).catch(err => {
-          console.error(`Failed to set sink ID for device: ${device.name}`, err);
-        });
-      }
-      
-      audioEl.play().catch(err => {
-        console.error("Audio element failed to play:", err);
-      });
-      
-      sourceNode.start(audioCtx.currentTime, offset);
-      
-      activeSourcesRef.current[idx] = {
-        sourceNode,
-        delayNode,
-        gainNode,
-        audioElement: audioEl,
-        destNode
-      };
-    } catch (err) {
-      console.error(`Failed to start individual device: ${device.name}`, err);
-    }
-  };
-
-  const stopDevicePlayback = (idx) => {
-    const activeSrc = activeSourcesRef.current[idx];
-    if (activeSrc) {
-      try {
-        activeSrc.sourceNode.stop();
-      } catch (e) {}
-      if (activeSrc.audioElement) {
-        activeSrc.audioElement.pause();
-        activeSrc.audioElement.srcObject = null;
-      }
-      delete activeSourcesRef.current[idx];
-    }
-  };
-
-  const handleTrackFinished = () => {
-    if (wsConnected) {
-      // Stream advances automatically via the server side sequence pacing
-    } else {
-      // Local queue fallback advancing
-      if (queue.length > 0) {
-        const nextTrack = queue[0];
-        setQueue(prev => prev.slice(1));
-        loadAndPlayTrackLocally(nextTrack);
-      } else {
-        setIsPlaying(false);
-        stopAllSources();
-        startOffsetRef.current = 0;
-        setProgress(0);
-      }
-    }
-  };
-
-  // ── Standalone Fallback Player ──────────────────────────────────────────────
-
-  const loadAndPlayTrackLocally = async (track) => {
-    try {
-      setIsLoading(true);
-      stopAllSources();
-      startOffsetRef.current = 0;
-      setProgress(0);
-      setCurrentTrack(track);
-      currentTrackRef.current = track;
-
-      const baseUrl = getBackendUrls().upload.replace('/api/upload', '');
-      let finalStreamUrl = track.is_local ? track.stream_url : `${baseUrl}/api/stream?url=${encodeURIComponent(track.url)}`;
-      if (track.is_local) {
-        const hostname = window.location.hostname;
-        const isLocal = hostname === 'localhost' || hostname === '127.0.0.1' || hostname.startsWith('192.168.') || !hostname;
-        if (!isLocal) {
-          finalStreamUrl = finalStreamUrl.replace('http://localhost:8000', 'https://headsetconnect.onrender.com');
-        }
-      }
-
-      const response = await fetch(finalStreamUrl);
-      if (!response.ok) throw new Error("Failed to fetch stream");
-      const arrayBuffer = await response.arrayBuffer();
-
-      if (!audioContextRef.current) {
-        audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
-      }
-      const audioCtx = audioContextRef.current;
-      if (audioCtx.state === 'suspended') {
-        await audioCtx.resume();
-      }
-
-      const decodedBuffer = await audioCtx.decodeAudioData(arrayBuffer);
-      decodedBufferRef.current = decodedBuffer;
-      setIsLoading(false);
-
-      setIsPlaying(true);
-      startSourcesAt(0);
-    } catch (err) {
-      console.error("Failed to load and play track locally:", err);
-      alert("Error loading audio. Please verify backend is online.");
-      setIsLoading(false);
-    }
-  };
-
-  // ── Device State Mutators ───────────────────────────────────────────────────
-
-  const handleToggleDevice = (idx, active) => {
-    setDevices(prev => prev.map(d => d.index === idx ? { ...d, active } : d));
-    
-    // Immediately start or stop playback for this device if actively playing
-    if (isPlayingRef.current && decodedBufferRef.current) {
-      if (active) {
-        setTimeout(() => {
-          startDevicePlayback(idx, progress);
-        }, 50);
-      } else {
-        stopDevicePlayback(idx);
-      }
-    }
-  };
-
-  const handleVolumeChange = (idx, vol) => {
-    setDevices(prev => prev.map(d => d.index === idx ? { ...d, volume: vol } : d));
-    
-    // Realtime adjustment of browser gain node
-    if (activeSourcesRef.current[idx]) {
-      const audioCtx = audioContextRef.current;
-      activeSourcesRef.current[idx].gainNode.gain.setValueAtTime(vol, audioCtx.currentTime);
-    }
-  };
-
-  const handleDelayChange = (idx, ms) => {
-    setDevices(prev => prev.map(d => d.index === idx ? { ...d, delay_ms: ms } : d));
-    
-    // Realtime adjustment of browser delay node
-    if (activeSourcesRef.current[idx]) {
-      const audioCtx = audioContextRef.current;
-      const delaySec = (ms + (activeSourcesRef.current[idx].latency_ms || 0)) / 1000.0;
-      activeSourcesRef.current[idx].delayNode.delayTime.setValueAtTime(delaySec, audioCtx.currentTime);
-    }
-  };
-
-  // ── UI Control Handlers ─────────────────────────────────────────────────────
-
   const handleScan = () => {
-    scanBrowserDevices();
+    setIsScanning(true);
+    send({ action: 'scan_devices' });
+    setTimeout(() => setIsScanning(false), 3000);
   };
 
   const handleSearch = (e) => {
@@ -880,227 +801,17 @@ export default function App() {
     send({ action: 'search', query: musicQuery });
   };
 
-  const handlePlayTrack = (track) => {
-    setSearchResults([]);
-    setMusicQuery('');
-    if (wsConnected) {
-      send({ action: 'play_track', track });
-    } else {
-      loadAndPlayTrackLocally(track);
-    }
-  };
+  const handlePlayTrack  = (track) => { send({ action: 'play_track', track }); setSearchResults([]); setMusicQuery(''); };
+  const handleTogglePlay = ()       => send({ action: isPlaying ? 'pause' : 'play' });
+  const handleStop       = ()       => send({ action: 'stop' });
+  const handleSeek       = (e)      => { const s = parseFloat(e.target.value); setProgress(s); send({ action: 'seek', seconds: s }); };
 
-  const handleTogglePlay = () => {
-    if (wsConnected) {
-      send({ action: isPlaying ? 'pause' : 'play' });
-    } else {
-      if (!decodedBufferRef.current) return;
-      const nextPlaying = !isPlaying;
-      setIsPlaying(nextPlaying);
-      if (nextPlaying) {
-        startSourcesAt(startOffsetRef.current);
-      } else {
-        const elapsed = audioContextRef.current.currentTime - startTimeRef.current;
-        startOffsetRef.current = (startOffsetRef.current + elapsed) % decodedBufferRef.current.duration;
-        stopAllSources();
-      }
-    }
-  };
-
-  const handleStop = () => {
-    if (wsConnected) {
-      send({ action: 'stop' });
-    } else {
-      setIsPlaying(false);
-      stopAllSources();
-      startOffsetRef.current = 0;
-      setProgress(0);
-    }
-  };
-
-  const handleSeek = (e) => {
-    const s = parseFloat(e.target.value);
-    setProgress(s);
-    if (wsConnected) {
-      send({ action: 'seek', seconds: s });
-    } else {
-      startOffsetRef.current = s;
-      if (isPlaying) {
-        stopAllSources();
-        startSourcesAt(s);
-      }
-    }
-  };
-
-  // ── Browser-Native Auto Calibration ────────────────────────────────────────
-
-  const handleCalibrate = async (idx) => {
+  const handleCalibrate = (idx) => {
     setCalibrationStates(prev => ({
       ...prev,
       [idx]: { status: 'calibrating', latency: 0, errorMsg: '' }
     }));
-
-    const device = devicesRef.current.find(d => d.index === idx);
-    if (!device) return;
-
-    let audioStream = null;
-    let recContext = null;
-    let playbackContext = null;
-
-    try {
-      audioStream = await navigator.mediaDevices.getUserMedia({ 
-        audio: {
-          echoCancellation: false,
-          noiseSuppression: false,
-          autoGainControl: false
-        } 
-      });
-
-      playbackContext = new (window.AudioContext || window.webkitAudioContext)();
-      const playDest = playbackContext.createMediaStreamDestination();
-      
-      const playAudio = new Audio();
-      playAudio.srcObject = playDest.stream;
-      playAudio.muted = false;
-      playAudio.volume = 1.0;
-      if (typeof playAudio.setSinkId === 'function' && device.deviceId) {
-        await playAudio.setSinkId(device.deviceId);
-      }
-      await playAudio.play();
-
-      recContext = new (window.AudioContext || window.webkitAudioContext)();
-      const recSource = recContext.createMediaStreamSource(audioStream);
-      const recNode = recContext.createScriptProcessor(4096, 1, 1);
-      
-      const recBuffer = [];
-      let isRecording = true;
-
-      recNode.onaudioprocess = (e) => {
-        if (!isRecording) return;
-        const inputData = e.inputBuffer.getChannelData(0);
-        recBuffer.push(new Float32Array(inputData));
-      };
-
-      recSource.connect(recNode);
-      recNode.connect(recContext.destination);
-
-      const wasPlaying = isPlayingRef.current;
-      if (wasPlaying) {
-        stopAllSources();
-      }
-
-      await new Promise(resolve => setTimeout(resolve, 200));
-      
-      const osc = playbackContext.createOscillator();
-      const oscGain = playbackContext.createGain();
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(1000, playbackContext.currentTime);
-      osc.frequency.exponentialRampToValueAtTime(1500, playbackContext.currentTime + 0.15);
-      
-      oscGain.gain.setValueAtTime(0, playbackContext.currentTime);
-      oscGain.gain.linearRampToValueAtTime(0.8, playbackContext.currentTime + 0.02);
-      oscGain.gain.setValueAtTime(0.8, playbackContext.currentTime + 0.13);
-      oscGain.gain.linearRampToValueAtTime(0, playbackContext.currentTime + 0.15);
-
-      osc.connect(oscGain);
-      oscGain.connect(playDest);
-
-      osc.start();
-      osc.stop(playbackContext.currentTime + 0.15);
-
-      await new Promise(resolve => setTimeout(resolve, 1200));
-
-      isRecording = false;
-      audioStream.getTracks().forEach(t => t.stop());
-      recSource.disconnect();
-      recNode.disconnect();
-      
-      let totalLength = 0;
-      for (const buf of recBuffer) {
-        totalLength += buf.length;
-      }
-      const recData = new Float32Array(totalLength);
-      let offset = 0;
-      for (const buf of recBuffer) {
-        recData.set(buf, offset);
-        offset += buf.length;
-      }
-
-      const sampleRate = recContext.sampleRate;
-      
-      const absData = new Float32Array(recData.length);
-      for (let i = 0; i < recData.length; i++) {
-        absData[i] = Math.abs(recData[i]);
-      }
-
-      const baselineSamples = Math.floor(sampleRate * 0.15);
-      let noiseSum = 0;
-      for (let i = 0; i < baselineSamples; i++) {
-        noiseSum += absData[i];
-      }
-      const noiseLevel = noiseSum / baselineSamples;
-      const threshold = Math.max(0.02, noiseLevel * 4.0);
-
-      let peakIndex = -1;
-      for (let i = baselineSamples; i < absData.length - 100; i++) {
-        if (absData[i] > threshold) {
-          let localSum = 0;
-          for (let j = 0; j < 50; j++) {
-            localSum += absData[i + j];
-          }
-          if (localSum / 50 > threshold) {
-            peakIndex = i;
-            break;
-          }
-        }
-      }
-
-      if (peakIndex !== -1) {
-        const elapsedSamples = peakIndex;
-        const recordedTimeMs = (elapsedSamples / sampleRate) * 1000.0;
-        let latency = Math.round(recordedTimeMs - 200);
-        
-        if (latency < 0) latency = 0;
-        if (latency > 800) {
-          throw new Error("Measured latency was out of bounds (> 800ms). Please ensure speakers are audible.");
-        }
-
-        console.log(`Auto Calibration Successful! Measured latency: ${latency}ms`);
-
-        setDevices(prev => prev.map(d => d.index === idx ? { ...d, latency_ms: latency, delay_ms: latency } : d));
-        
-        setCalibrationStates(prev => ({
-          ...prev,
-          [idx]: {
-            status: 'success',
-            latency: latency,
-            errorMsg: ''
-          }
-        }));
-
-        if (wasPlaying) {
-          setTimeout(() => {
-            startSourcesAt(startOffsetRef.current);
-          }, 300);
-        }
-      } else {
-        throw new Error("Could not detect the calibration chirp. Please check microphone input volume and speaker loudness.");
-      }
-
-    } catch (err) {
-      console.error("Calibration failed:", err);
-      setCalibrationStates(prev => ({
-        ...prev,
-        [idx]: {
-          status: 'error',
-          latency: 0,
-          errorMsg: err.message || "Failed to capture chirp. Please verify permissions."
-        }
-      }));
-    } finally {
-      if (playbackContext) playbackContext.close();
-      if (recContext) recContext.close();
-    }
+    send({ action: 'calibrate_device', index: idx });
   };
 
   const handleResetProfile = (idx) => {
@@ -1109,7 +820,7 @@ export default function App() {
       delete ns[idx];
       return ns;
     });
-    setDevices(prev => prev.map(d => d.index === idx ? { ...d, latency_ms: 0, delay_ms: 0 } : d));
+    send({ action: 'reset_profile', index: idx });
   };
 
   const handleDragOver = (e) => {
@@ -1134,88 +845,54 @@ export default function App() {
     if (!files || files.length === 0) return;
     const file = files[0];
     const fileType = file.name.split('.').pop().toLowerCase();
-    if (!['mp3', 'wav', 'flac'].includes(fileType)) {
-      alert("Only MP3, WAV, and FLAC files are supported.");
+    const allowed = ['mp3', 'wav', 'flac', 'mp4', 'webm', 'mkv', 'mov', 'avi', 'flv', '3gp', 'mpeg', 'mpg'];
+    if (!allowed.includes(fileType)) {
+      alert("Only audio files (MP3, WAV, FLAC) and video files (MP4, WEBM, MKV, MOV, AVI) are supported.");
       return;
     }
 
-    if (!wsConnected) {
-      const reader = new FileReader();
-      reader.onload = async (event) => {
-        try {
-          setIsLoading(true);
-          const arrayBuffer = event.target.result;
-          if (!audioContextRef.current) {
-            audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
-          }
-          const decodedBuffer = await audioContextRef.current.decodeAudioData(arrayBuffer);
-          decodedBufferRef.current = decodedBuffer;
-          
-          const localTrack = {
-            id: `local_${Date.now()}`,
-            title: file.name,
-            duration: decodedBuffer.duration,
-            uploader: "Local Browser File",
-            is_local: true,
-            thumbnail: ""
-          };
-          setCurrentTrack(localTrack);
-          currentTrackRef.current = localTrack;
-          setIsLoading(false);
-          setIsPlaying(true);
-          startSourcesAt(0);
-        } catch (err) {
-          console.error("Local decode failed:", err);
-          alert("Failed to decode local file in browser.");
-          setIsLoading(false);
+    const formData = new FormData();
+    formData.append("file", file);
+
+    try {
+      setUploadProgress(0);
+      
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", `http://${backendHost}/api/upload`, true);
+      
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable) {
+          const pct = Math.round((event.loaded / event.total) * 100);
+          setUploadProgress(pct);
         }
       };
-      reader.readAsArrayBuffer(file);
-    } else {
-      const formData = new FormData();
-      formData.append("file", file);
 
-      try {
-        setUploadProgress(0);
-        
-        const urls = getBackendUrls();
-        const xhr = new XMLHttpRequest();
-        xhr.open("POST", urls.upload, true);
-        
-        xhr.upload.onprogress = (event) => {
-          if (event.lengthComputable) {
-            const pct = Math.round((event.loaded / event.total) * 100);
-            setUploadProgress(pct);
-          }
-        };
-
-        xhr.onload = () => {
-          try {
-            const res = JSON.parse(xhr.responseText);
-            if (res.success) {
-              setUploadProgress(null);
-            } else {
-              alert(`Upload failed: ${res.error}`);
-              setUploadProgress(null);
-            }
-          } catch (err) {
-            console.error("Upload response parse error:", err);
-            alert("Error parsing upload response.");
+      xhr.onload = () => {
+        try {
+          const res = JSON.parse(xhr.responseText);
+          if (res.success) {
+            setUploadProgress(null);
+          } else {
+            alert(`Upload failed: ${res.error}`);
             setUploadProgress(null);
           }
-        };
-
-        xhr.onerror = () => {
-          alert("Network error uploading file.");
+        } catch (err) {
+          console.error("Upload response parse error:", err);
+          alert("Error parsing upload response.");
           setUploadProgress(null);
-        };
+        }
+      };
 
-        xhr.send(formData);
-      } catch (error) {
-        console.error("Upload error:", error);
-        alert("Error initiating upload.");
+      xhr.onerror = () => {
+        alert("Network error uploading file.");
         setUploadProgress(null);
-      }
+      };
+
+      xhr.send(formData);
+    } catch (error) {
+      console.error("Upload error:", error);
+      alert("Error initiating upload.");
+      setUploadProgress(null);
     }
   };
 
@@ -1257,6 +934,10 @@ export default function App() {
   // ── Computed ─────────────────────────────────────────────────────────────────
 
   const activeCount     = devices.filter(d => d.active).length;
+  const activeDevices   = devices.filter(d => d.active);
+  const maxLatencyMs    = activeDevices.length > 0 
+    ? Math.max(...activeDevices.map(d => d.latency_ms || 0)) 
+    : 0;
   const filteredDevices = devices
     .filter(d => d.name.toLowerCase().includes(deviceSearch.toLowerCase()))
     .sort((a, b) => {
@@ -1296,9 +977,22 @@ export default function App() {
             <Activity size={12} />
             <span>{activeCount} active</span>
           </div>
-          <span className={`status-badge ${wsConnected ? 'ok' : 'err'}`}>
-            {wsConnected ? <><Wifi size={12} />Live</> : <><WifiOff size={12} />Offline</>}
+          <span 
+            className={`status-badge ${wsConnected ? 'ok' : 'err'} interactive`}
+            onClick={() => setShowSettingsModal(true)}
+            title="Configure backend host connection"
+            style={{ cursor: 'pointer' }}
+          >
+            {wsConnected ? <><Wifi size={12} />Connected</> : <><WifiOff size={12} />Disconnected</>}
           </span>
+          <button 
+            className="icon-btn small header-settings-btn"
+            onClick={() => setShowSettingsModal(true)}
+            title="Connection Settings"
+            style={{ marginLeft: '6px', height: '24px', width: '24px', padding: 0, justifyContent: 'center', display: 'flex', alignItems: 'center' }}
+          >
+            <Settings2 size={13} />
+          </button>
         </div>
       </header>
 
@@ -1320,8 +1014,8 @@ export default function App() {
             >
               <div className="overlay-content">
                 <Upload size={48} className="animate-bounce text-orange" />
-                <h3>Drop audio files here</h3>
-                <p>MP3, WAV, and FLAC files will upload in sync.</p>
+                <h3>Drop media files here</h3>
+                <p>MP3, WAV, FLAC, and video files will upload in sync.</p>
               </div>
             </div>
           )}
@@ -1417,25 +1111,7 @@ export default function App() {
                       {isPlaying && <div className="art-playing-ring" />}
                     </div>
                     <div className="track-details">
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                        <h3>{currentTrack.title}</h3>
-                        {isLoading && (
-                          <span className="track-loading-badge font-mono animate-pulse" style={{
-                            fontSize: '0.68rem',
-                            background: 'rgba(255, 120, 0, 0.15)',
-                            color: 'var(--orange)',
-                            padding: '2px 6px',
-                            borderRadius: '3px',
-                            border: '1px solid rgba(255, 120, 0, 0.3)',
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '4px'
-                          }}>
-                            <RefreshCw size={10} className="spinning" />
-                            DECODING...
-                          </span>
-                        )}
-                      </div>
+                      <h3>{currentTrack.title}</h3>
                       <p>{currentTrack.uploader || 'Local Library File'}</p>
                       <div className={`wave ${isPlaying ? 'playing' : ''}`}>
                         {[...Array(8)].map((_, i) => (
@@ -1468,6 +1144,22 @@ export default function App() {
                     <button id="stop-btn" className="btn-control" onClick={handleStop} title="Stop">
                       <SquareX size={18} /><span>Stop</span>
                     </button>
+                    {hasVideoSupport(currentTrack) && (
+                      <button 
+                        id="watch-video-btn" 
+                        className="btn-control" 
+                        onClick={() => setShowVideo(p => !p)} 
+                        title="Watch Video"
+                        style={{ 
+                          borderColor: showVideo ? 'var(--cyan)' : 'var(--border)', 
+                          color: showVideo ? 'var(--cyan)' : 'var(--text-2)',
+                          boxShadow: showVideo ? '0 0 10px rgba(0, 229, 255, 0.2)' : 'none'
+                        }}
+                      >
+                        <Video size={18} />
+                        <span>{showVideo ? 'Watching' : 'Watch'}</span>
+                      </button>
+                    )}
                   </div>
 
                   {activeCount > 0 && (
@@ -1586,7 +1278,7 @@ export default function App() {
                 <input
                   id="local-file-picker"
                   type="file"
-                  accept=".mp3,.wav,.flac"
+                  accept=".mp3,.wav,.flac,.mp4,.webm,.mkv,.mov,.avi,.flv,.3gp,.mpeg,.mpg"
                   style={{ display: 'none' }}
                   onChange={(e) => handleFileUpload(e.target.files)}
                 />
@@ -1602,7 +1294,7 @@ export default function App() {
                 ) : (
                   <div className="dropzone-content font-mono">
                     <Upload size={18} className="text-orange" />
-                    <span>&gt; DRAG & DROP AUDIO OR CLICK TO SELECT (MP3, WAV, FLAC)</span>
+                    <span>&gt; DRAG & DROP MEDIA OR CLICK TO SELECT (MP3, WAV, FLAC, MP4, WEBM, MKV)</span>
                   </div>
                 )}
               </div>
@@ -1691,13 +1383,13 @@ export default function App() {
             ) : (
               filteredDevices.map(dev => (
                 <DeviceCard
-                  key={dev.index}
+                  key={dev.name}
                   device={dev}
                   isNew={hotPlugNames.has(dev.name) && !dev.active}
                   calibrationState={calibrationStates[dev.index]}
-                  onToggle={handleToggleDevice}
-                  onVolume={handleVolumeChange}
-                  onDelay={handleDelayChange}
+                  onToggle={(idx, val) => send({ action: 'toggle_device', index: idx, active: val })}
+                  onVolume={(idx, vol) => send({ action: 'set_volume', index: idx, volume: vol })}
+                  onDelay={(idx, ms)  => send({ action: 'set_delay', index: idx, delay_ms: ms })}
                   onCalibrate={handleCalibrate}
                   onResetProfile={handleResetProfile}
                 />
@@ -1724,6 +1416,92 @@ export default function App() {
         </section>
 
       </div>
+
+      {showVideo && currentTrack && hasVideoSupport(currentTrack) && (
+        <SyncedVideoPlayer
+          track={currentTrack}
+          isPlaying={isPlaying}
+          progress={progress}
+          latency={maxLatencyMs}
+          onClose={() => setShowVideo(false)}
+          onTogglePlay={handleTogglePlay}
+          onSeek={(seconds) => send({ action: 'seek', seconds })}
+          backendHost={backendHost}
+        />
+      )}
+
+      {showSettingsModal && (
+        <div className="video-overlay-backdrop modal-overlay" onClick={() => setShowSettingsModal(false)}>
+          <div className="connection-modal-container" onClick={e => e.stopPropagation()}>
+            <div className="connection-modal-header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Settings2 size={18} className="text-cyan" />
+                <h3>Backend Connection Settings</h3>
+              </div>
+              <button className="btn-ghost-sm" onClick={() => setShowSettingsModal(false)}>Close</button>
+            </div>
+            <div className="connection-modal-body">
+              <p className="font-mono text-dim" style={{ fontSize: '0.78rem', marginBottom: '1rem', lineHeight: '1.4' }}>
+                Configure the IP address or host name of the computer running the HeadsetConnect local Python server.
+              </p>
+              
+              <div className="form-group" style={{ marginBottom: '1.2rem' }}>
+                <label className="font-mono" style={{ display: 'block', marginBottom: '0.4rem', fontSize: '0.78rem', color: 'var(--text-2)' }}>
+                  Backend Server IP / Address
+                </label>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <input
+                    type="text"
+                    className="search-field"
+                    style={{ flex: 1, fontFamily: 'monospace', fontSize: '0.9rem', padding: '0.4rem 0.6rem' }}
+                    value={tempHost}
+                    onChange={e => setTempHost(e.target.value)}
+                    placeholder="e.g. localhost:8000 or 192.168.1.15:8000"
+                  />
+                  <button 
+                    className="btn-primary" 
+                    onClick={() => {
+                      if (tempHost.trim()) {
+                        localStorage.setItem('hc_backend_host', tempHost.trim());
+                        setBackendHost(tempHost.trim());
+                        setShowSettingsModal(false);
+                      }
+                    }}
+                  >
+                    Save
+                  </button>
+                </div>
+              </div>
+
+              <div className="connection-instructions font-mono" style={{ fontSize: '0.72rem', border: '1px solid var(--border)', padding: '10px', borderRadius: '4px', background: 'rgba(5, 10, 20, 0.4)' }}>
+                <h5 className="text-orange" style={{ margin: '0 0 6px 0', fontSize: '0.78rem' }}>&gt; MULTI-DEVICE SETUP INSTRUCTIONS:</h5>
+                <ol style={{ paddingLeft: '14px', margin: 0, listStyleType: 'decimal' }}>
+                  <li style={{ marginBottom: '4px' }}>Find your host computer's local IP address (e.g. run <code>ipconfig</code> in CMD/PowerShell on Windows).</li>
+                  <li style={{ marginBottom: '4px' }}>Look for the IPv4 Address (e.g. <code>192.168.1.15</code>).</li>
+                  <li style={{ marginBottom: '4px' }}>Enter that IP address followed by <code>:8000</code> in this field (e.g. <code>192.168.1.15:8000</code>).</li>
+                  <li>Open the public Vercel/tunnel link on your phone/tablet, open this settings menu, and enter the exact same address!</li>
+                </ol>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-start', marginTop: '1.2rem' }}>
+                <button 
+                  className="btn-ghost-sm text-dim"
+                  style={{ fontSize: '0.75rem', padding: 0 }}
+                  onClick={() => {
+                    const defaultHost = getInitialBackendHost();
+                    localStorage.removeItem('hc_backend_host');
+                    setBackendHost(defaultHost);
+                    setTempHost(defaultHost);
+                    setShowSettingsModal(false);
+                  }}
+                >
+                  Reset to Default Address
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

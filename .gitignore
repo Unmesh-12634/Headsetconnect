@@ -38,3 +38,8 @@ backend/uploads/*
 *.swp
 .DS_Store
 Thumbs.db
+
+# PyInstaller build artifacts
+build/
+*.spec
+

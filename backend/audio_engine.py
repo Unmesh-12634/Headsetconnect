@@ -1,3 +1,4 @@
+import sounddevice as sd
 import numpy as np
 import threading
 import time
@@ -8,21 +9,6 @@ import json
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("AudioEngine")
-
-# Optional sounddevice/PortAudio loading for headless cloud environments
-sd = None
-HAS_SOUNDDEVICE = False
-
-if os.getenv("HEADLESS") == "true":
-    logger.info("Running in Headless Cloud Mode. sounddevice/PortAudio bypassed entirely.")
-else:
-    try:
-        import sounddevice as sd
-        HAS_SOUNDDEVICE = True
-    except Exception as sd_err:
-        logger.warning(
-            f"sounddevice/PortAudio could not be loaded (running in headless mode?): {sd_err}"
-        )
 
 
 def clean_device_name(raw_name: str) -> str:
@@ -151,9 +137,6 @@ class AudioDevice:
 
     def _play_loop(self):
         try:
-            if not sd:
-                raise RuntimeError("sounddevice is not available in headless cloud mode.")
-
             device_index = self.index
 
             # Open output stream using native device channel support
@@ -244,7 +227,11 @@ class AudioEngine:
         self._user_disconnected: set = set()
         # True after first websocket connects — new hot-plugged devices stay inactive
         self._startup_complete: bool = False
-        self.profiles_path = os.path.join(os.path.dirname(__file__), "profiles.json")
+        import sys
+        if getattr(sys, 'frozen', False):
+            self.profiles_path = os.path.join(os.path.dirname(sys.executable), "profiles.json")
+        else:
+            self.profiles_path = os.path.join(os.path.dirname(__file__), "profiles.json")
         self.profiles = self.load_profiles()
         self._last_refresh_time = 0.0
         self.seek_offset_seconds = 0.0
@@ -288,10 +275,16 @@ class AudioEngine:
     # ── Device discovery ────────────────────────────────────────────────────────
 
     def get_available_devices(self):
-        """Query host system output devices, deduplicated by cleaned name. ..."""
-        if not sd:
-            return []
+        """Query host system output devices, deduplicated by cleaned name.
 
+        Windows exposes the same physical device via multiple host APIs
+        (MME, DirectSound, WASAPI, WDM-KS).  We:
+          1. Skip WDM-KS entirely — it does not support the blocking API used by
+             sounddevice (PaErrorCode -9999).
+          2. Deduplicate by cleaned name, preferring WASAPI > DirectSound > MME.
+          3. Only refresh the PortAudio cache when not playing and at least 5s
+             have elapsed since the last refresh.
+        """
         try:
             # Refresh PortAudio device cache only when idle and stale
             now = time.time()
@@ -369,8 +362,6 @@ class AudioEngine:
         sys_devices = self.get_available_devices()
 
         try:
-            if not sd:
-                raise RuntimeError("sounddevice not loaded")
             default_info = sd.query_devices(kind='output')
             default_cleaned = clean_device_name(default_info['name'])
             
@@ -382,8 +373,7 @@ class AudioEngine:
                 logger.debug(f"System default playback device: {default_cleaned!r}")
         except Exception as e:
             default_cleaned = None
-            if HAS_SOUNDDEVICE:
-                logger.warning(f"Could not query default system device: {e}")
+            logger.warning(f"Could not query default system device: {e}")
 
         existing_by_name = {d.name: d for d in self.devices.values()}
         new_device_map = {}
@@ -441,8 +431,7 @@ class AudioEngine:
         
         # Only log active devices when the active set changes, during changes, or on startup
         if old_active != new_active or devices_changed or not self._startup_complete:
-            if HAS_SOUNDDEVICE:
-                logger.info(f"Active devices: {list(new_active)}")
+            logger.info(f"Active devices: {list(new_active)}")
 
     def refresh_devices_safely(self):
         """Force PortAudio cache refresh and re-scan devices.
@@ -600,9 +589,6 @@ class AudioEngine:
 
         Returns a dict: {"success": bool, "latency_ms": float, "confidence": float, "error": str}
         """
-        if not sd:
-            return {"success": False, "error": "Calibration is not supported in headless cloud mode."}
-
         if index not in self.devices:
             return {"success": False, "error": "Device not found."}
         dev = self.devices[index]
@@ -781,7 +767,7 @@ class AudioEngine:
         was_playing = self.is_playing
         self.seek_offset_seconds = seconds
         self.clear_buffer(keep_seek_offset=True)
-        streamer.play_track(streamer.current_track, start_seconds=seconds)
+        streamer.play_track(streamer.current_track, start_seconds=seconds, keep_seek_offset=True)
         if not was_playing:
             self.pause()
 
