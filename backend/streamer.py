@@ -56,6 +56,17 @@ class AudioStreamer:
             },
         }
 
+        # Dynamic cookies.txt check to bypass cloud IP blocks
+        import sys
+        if getattr(sys, 'frozen', False):
+            cookies_path = os.path.join(os.path.dirname(sys.executable), "cookies.txt")
+        else:
+            cookies_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
+
+        if os.path.exists(cookies_path):
+            logger.info(f"Using YouTube account cookies from: {cookies_path}")
+            _common_anti_bot['cookiefile'] = cookies_path
+
         # Options for searching — fast, minimal extraction
         self.search_opts = {
             **_common_anti_bot,
