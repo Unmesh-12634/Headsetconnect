@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: headsetconnect
+    env: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    region: oregon
+    envVars:
+      - key: PORT
+        value: 8000
+      - key: YOUTUBE_COOKIES
+        sync: false
+        description: "Netscape cookies.txt text content for YouTube anti-bot bypass (optional)"
+      - key: YOUTUBE_PROXY
+        sync: false
+        description: "HTTP/HTTPS residential proxy URL, e.g. http://user:pass@host:port (optional)"

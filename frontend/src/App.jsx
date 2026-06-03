@@ -116,7 +116,7 @@ const getInitialBackendHost = () => {
   if (isLocalhost) {
     return `${window.location.hostname}:8000`;
   }
-  return 'localhost:8000'; // Default fallback for cloud instances (e.g. Vercel)
+  return window.location.host; // Default fallback to current host (e.g. Render cloud deployment)
 };
 
 // Rewrite local media source URLs dynamically if connecting to a remote backend host
@@ -124,7 +124,8 @@ const getLocalVideoSrc = (track, backendHost) => {
   if (!track || !track.url) return '';
   if (track.is_local && track.url.includes('/uploads/')) {
     const filename = track.url.split('/uploads/').pop();
-    return `http://${backendHost}/uploads/${filename}`;
+    const protocol = window.location.protocol; // will be 'http:' or 'https:'
+    return `${protocol}//${backendHost}/uploads/${filename}`;
   }
   return track.url;
 };
@@ -660,7 +661,6 @@ function SyncedVideoPlayer({ track, isPlaying, progress, latency, onClose, onTog
 
 export default function App() {
   const [wsConnected,    setWsConnected]    = useState(false);
-  const [hasDownloaded,  setHasDownloaded]  = useState(() => localStorage.getItem('hc_has_downloaded') === 'true');
   const [devices,        setDevices]        = useState([]);
   const [isPlaying,      setIsPlaying]      = useState(false);
   const [progress,       setProgress]       = useState(0);
@@ -711,7 +711,8 @@ export default function App() {
 
   useEffect(() => {
     function connectWebSocket() {
-      const ws = new WebSocket(`ws://${backendHost}/ws`);
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const ws = new WebSocket(`${protocol}//${backendHost}/ws`);
       wsRef.current = ws;
 
       ws.onopen = () => {
@@ -784,22 +785,7 @@ export default function App() {
 
   // ── Actions ─────────────────────────────────────────────────────────────────
 
-  const handleLaunchApp = () => {
-    localStorage.setItem('hc_has_downloaded', 'true');
-    setHasDownloaded(true);
-    window.location.href = 'headsetconnect://';
-  };
 
-  const handleDownloadApp = () => {
-    localStorage.setItem('hc_has_downloaded', 'true');
-    setHasDownloaded(true);
-    window.location.href = "/HeadsetConnect.exe";
-  };
-
-  const handleClearDownloadStatus = () => {
-    localStorage.removeItem('hc_has_downloaded');
-    setHasDownloaded(false);
-  };
 
   const send = (payload) => {
     if (wsRef.current?.readyState === WebSocket.OPEN)
@@ -876,7 +862,8 @@ export default function App() {
       setUploadProgress(0);
       
       const xhr = new XMLHttpRequest();
-      xhr.open("POST", `http://${backendHost}/api/upload`, true);
+      const protocol = window.location.protocol; // 'http:' or 'https:'
+      xhr.open("POST", `${protocol}//${backendHost}/api/upload`, true);
       
       xhr.upload.onprogress = (event) => {
         if (event.lengthComputable) {
@@ -1070,98 +1057,18 @@ export default function App() {
             {!wsConnected && (
               <div className="connection-warning-card font-mono" style={{ marginBottom: '1.5rem', padding: '16px', border: '1px dashed var(--red)', borderRadius: '8px', background: 'rgba(255, 82, 82, 0.03)' }}>
                 <h4 className="text-red" style={{ margin: '0 0 8px 0', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.85rem' }}>
-                  <WifiOff size={14} /> Local Server Disconnected
+                  <WifiOff size={14} /> Server Connection Lost
                 </h4>
-                
                 <p style={{ fontSize: '0.78rem', color: 'var(--text-2)', lineHeight: '1.45', margin: '0 0 10px 0' }}>
-                  The frontend cannot communicate with the local HeadsetConnect audio engine on your computer.
+                  The frontend is unable to connect to the HeadsetConnect server. Retrying connection...
                 </p>
-
-                {hasDownloaded ? (
-                  <>
-                    <div style={{ fontSize: '0.75rem', border: '1px solid var(--border)', padding: '10px', borderRadius: '4px', background: 'rgba(5, 10, 20, 0.3)', marginBottom: '12px', lineHeight: '1.45' }}>
-                      <span className="text-cyan" style={{ display: 'block', marginBottom: '4px', fontWeight: 'bold' }}>&gt; LAUNCH LOCAL SERVER</span>
-                      Open the app on your computer. If it's already running, make sure to click <strong>Connect to Local System</strong>.
-                    </div>
-
-                    <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
-                      <button 
-                        className="btn-primary small"
-                        style={{ fontSize: '0.72rem', padding: '5px 12px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '6px', backgroundColor: 'var(--cyan)', color: '#050a14', border: 'none', borderRadius: '4px', fontWeight: 'bold' }}
-                        onClick={handleLaunchApp}
-                        title="Click to launch HeadsetConnect using the custom URL protocol"
-                      >
-                        <Zap size={12} fill="#050a14" /> Launch HeadsetConnect
-                      </button>
-                      
-                      <button 
-                        className="btn-outline small text-cyan"
-                        style={{ fontSize: '0.72rem', padding: '5px 10px', cursor: 'pointer' }}
-                        onClick={() => {
-                          localStorage.setItem('hc_backend_host', 'localhost:8000');
-                          setBackendHost('localhost:8000');
-                        }}
-                      >
-                        Connect to Local System
-                      </button>
-
-                      <a 
-                        href="/HeadsetConnect.exe" 
-                        className="btn-ghost-sm text-dim font-mono"
-                        onClick={handleDownloadApp}
-                        style={{ fontSize: '0.72rem', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
-                      >
-                        Download again (.exe) &gt;
-                      </a>
-
-                      <button
-                        className="btn-ghost-sm text-red font-mono"
-                        style={{ fontSize: '0.72rem', cursor: 'pointer', background: 'none', border: 'none', padding: 0 }}
-                        onClick={handleClearDownloadStatus}
-                      >
-                        Reset Status
-                      </button>
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <div style={{ fontSize: '0.75rem', border: '1px solid var(--border)', padding: '10px', borderRadius: '4px', background: 'rgba(5, 10, 20, 0.3)', marginBottom: '12px', lineHeight: '1.45' }}>
-                      <span className="text-orange" style={{ display: 'block', marginBottom: '4px', fontWeight: 'bold' }}>&gt; DESKTOP APP REQUIRED</span>
-                      You need the Windows desktop background app to route audio to your Bluetooth headsets.
-                    </div>
-
-                    <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
-                      <button 
-                        className="btn-primary small"
-                        style={{ fontSize: '0.72rem', padding: '5px 12px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '6px', backgroundColor: 'var(--orange)', color: '#050a14', border: 'none', borderRadius: '4px', fontWeight: 'bold' }}
-                        onClick={handleDownloadApp}
-                      >
-                        <Upload size={12} fill="#050a14" style={{ transform: 'rotate(180deg)' }} /> Download Desktop App (.exe)
-                      </button>
-                      
-                      <button 
-                        className="btn-outline small text-cyan"
-                        style={{ fontSize: '0.72rem', padding: '5px 10px', cursor: 'pointer' }}
-                        onClick={() => {
-                          localStorage.setItem('hc_backend_host', 'localhost:8000');
-                          setBackendHost('localhost:8000');
-                        }}
-                      >
-                        Connect to Local System
-                      </button>
-
-                      <button 
-                        className="btn-ghost-sm text-cyan font-mono"
-                        style={{ fontSize: '0.72rem', cursor: 'pointer', background: 'none', border: 'none', padding: 0 }}
-                        onClick={handleLaunchApp}
-                      >
-                        Already have it? Launch App &gt;
-                      </button>
-                    </div>
-                  </>
-                )}
+                <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                  <span className="dot amber pulse-ring" />
+                  <span className="text-dim" style={{ fontSize: '0.72rem' }}>Reconnecting...</span>
+                </div>
               </div>
             )}
+
 
             {/* YouTube Search */}
             <div className="search-section-hud" style={{ marginTop: 0 }}>

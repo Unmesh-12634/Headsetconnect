@@ -56,16 +56,39 @@ class AudioStreamer:
             },
         }
 
-        # Dynamic cookies.txt check to bypass cloud IP blocks
+        # Dynamic cookies check to bypass cloud IP blocks (e.g. Render)
         import sys
-        if getattr(sys, 'frozen', False):
-            cookies_path = os.path.join(os.path.dirname(sys.executable), "cookies.txt")
+        
+        # Check for YOUTUBE_COOKIES env variable first (Render/cloud deployment friendly)
+        youtube_cookies_env = os.getenv("YOUTUBE_COOKIES")
+        if youtube_cookies_env:
+            try:
+                # Write to temp file inside backend/uploads or system temp folder
+                temp_cookies_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads")
+                os.makedirs(temp_cookies_dir, exist_ok=True)
+                temp_cookies_path = os.path.join(temp_cookies_dir, "cookies_env.txt")
+                with open(temp_cookies_path, "w", encoding="utf-8") as f:
+                    f.write(youtube_cookies_env)
+                logger.info(f"Loaded YouTube cookies from YOUTUBE_COOKIES environment variable, saved to: {temp_cookies_path}")
+                _common_anti_bot['cookiefile'] = temp_cookies_path
+            except Exception as cookies_err:
+                logger.error(f"Failed to write YOUTUBE_COOKIES environment variable: {cookies_err}")
         else:
-            cookies_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
+            # Fallback to local cookies.txt file check
+            if getattr(sys, 'frozen', False):
+                cookies_path = os.path.join(os.path.dirname(sys.executable), "cookies.txt")
+            else:
+                cookies_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
 
-        if os.path.exists(cookies_path):
-            logger.info(f"Using YouTube account cookies from: {cookies_path}")
-            _common_anti_bot['cookiefile'] = cookies_path
+            if os.path.exists(cookies_path):
+                logger.info(f"Using YouTube account cookies from: {cookies_path}")
+                _common_anti_bot['cookiefile'] = cookies_path
+
+        # Proxy check (helpful for Render/datacenter IP bans)
+        youtube_proxy_env = os.getenv("YOUTUBE_PROXY") or os.getenv("PROXY_URL")
+        if youtube_proxy_env:
+            logger.info(f"Routing YouTube traffic via proxy: {youtube_proxy_env}")
+            _common_anti_bot['proxy'] = youtube_proxy_env
 
         # Options for searching — fast, minimal extraction
         self.search_opts = {

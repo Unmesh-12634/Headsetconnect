@@ -1,4 +1,3 @@
-import sounddevice as sd
 import numpy as np
 import threading
 import time
@@ -9,6 +8,70 @@ import json
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("AudioEngine")
+
+# Try to import sounddevice. If it fails (e.g. headless server without PortAudio),
+# supply a MockSoundDevice fallback so uvicorn can run on Render.
+try:
+    import sounddevice as sd
+    # Try querying devices to ensure PortAudio compiles and initializes
+    sd.query_devices()
+    PORTAUDIO_AVAILABLE = True
+except (ImportError, OSError, Exception) as e:
+    logger.warning(
+        f"PortAudio/sounddevice failed to initialize: {e}. "
+        "Running in headless/mock audio mode."
+    )
+    PORTAUDIO_AVAILABLE = False
+
+    class MockOutputStream:
+        def __init__(self, *args, **kwargs):
+            self.sample_rate = kwargs.get('samplerate', 44100)
+            self.channels = kwargs.get('channels', 2)
+
+        def start(self):
+            pass
+
+        def stop(self):
+            pass
+
+        def close(self):
+            pass
+
+        def write(self, data):
+            # Simulate real-time audio playback pacing by sleeping for the chunk duration
+            num_frames = len(data)
+            duration = num_frames / self.sample_rate
+            time.sleep(duration)
+
+    class MockSoundDevice:
+        OutputStream = MockOutputStream
+
+        def query_devices(self, *args, **kwargs):
+            if kwargs.get('kind') == 'output':
+                return {"name": "Mock Cloud Output", "index": 0, "default_samplerate": 44100}
+            if kwargs.get('kind') == 'input':
+                return {"name": "Mock Cloud Input", "index": 0}
+            return [{"name": "Mock Cloud Output", "max_output_channels": 2, "hostapi": 0, "default_samplerate": 44100}]
+
+        def query_hostapis(self):
+            return [{"name": "Mock API"}]
+
+        def rec(self, frames, samplerate, channels, **kwargs):
+            return np.zeros((frames, channels), dtype='float32')
+
+        def play(self, data, samplerate, **kwargs):
+            pass
+
+        def wait(self):
+            pass
+
+        def _terminate(self):
+            pass
+
+        def _initialize(self):
+            pass
+
+    sd = MockSoundDevice()
 
 
 def clean_device_name(raw_name: str) -> str:
