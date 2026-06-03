@@ -328,52 +328,176 @@ class AudioStreamer:
         logger.info("yt-dlp search failed entirely — falling back to Invidious/Piped API...")
         return self.search_invidious_fallback(query_str)
 
-    def get_track_info(self, url):
-        """Extract stream url and metadata for a direct YouTube URL."""
+    def _extract_video_id(self, url):
+        """Extract the 11-character YouTube video ID from a URL."""
+        import re
+        match = re.search(r'(?:v=|youtu\.be/|/embed/|/v/)([a-zA-Z0-9_-]{11})', url)
+        return match.group(1) if match else None
+
+    def _get_stream_via_invidious(self, video_id, title_hint="", uploader_hint=""):
+        """Try to get a playable audio stream URL from Invidious API."""
+        import urllib.request, json
+        instances = [
+            "https://yewtu.be",
+            "https://invidious.flokinet.to",
+            "https://invidious.projectsegfau.lt",
+            "https://inv.tux.im",
+            "https://invidious.privacydev.net",
+            "https://vid.priv.au",
+            "https://invidious.perennialte.ch",
+            "https://invidious.io.lol",
+        ]
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        for instance in instances:
+            try:
+                req = urllib.request.Request(
+                    f"{instance}/api/v1/videos/{video_id}?fields=title,author,lengthSeconds,adaptiveFormats,formatStreams",
+                    headers=headers,
+                )
+                with urllib.request.urlopen(req, timeout=7) as resp:
+                    data = json.loads(resp.read().decode('utf-8'))
+
+                # Prefer audio-only adaptive formats (opus/webm), sorted by bitrate
+                adaptive = data.get("adaptiveFormats", [])
+                audio_formats = [
+                    f for f in adaptive
+                    if f.get("type", "").startswith("audio/")
+                    and f.get("url")
+                ]
+                if not audio_formats:
+                    # Fall back to muxed formatStreams
+                    audio_formats = [f for f in data.get("formatStreams", []) if f.get("url")]
+
+                if not audio_formats:
+                    continue
+
+                audio_formats.sort(key=lambda f: int(f.get("bitrate", 0)), reverse=True)
+                stream_url = audio_formats[0]["url"]
+                logger.info(f"Invidious stream URL resolved ({instance}): {data.get('title')}")
+                return {
+                    "id": video_id,
+                    "title": data.get("title") or title_hint or "Unknown",
+                    "duration": data.get("lengthSeconds", 0),
+                    "uploader": data.get("author") or uploader_hint or "Unknown Artist",
+                    "stream_url": stream_url,
+                    "url": f"https://www.youtube.com/watch?v={video_id}",
+                    "thumbnail": f"https://img.youtube.com/vi/{video_id}/mqdefault.jpg",
+                    "http_headers": None,
+                }
+            except Exception as e:
+                logger.warning(f"Invidious stream fetch failed ({instance}): {e}")
+        return None
+
+    def _get_stream_via_piped(self, video_id, title_hint="", uploader_hint=""):
+        """Try to get a playable audio stream URL from Piped API."""
+        import urllib.request, json
+        piped_instances = [
+            "https://pipedapi.kavin.rocks",
+            "https://pipedapi.adminforge.de",
+            "https://pipedapi.coldify.de",
+            "https://piped-api.garudalinux.org",
+        ]
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        for instance in piped_instances:
+            try:
+                req = urllib.request.Request(
+                    f"{instance}/streams/{video_id}", headers=headers
+                )
+                with urllib.request.urlopen(req, timeout=7) as resp:
+                    data = json.loads(resp.read().decode('utf-8'))
+
+                audio_streams = data.get("audioStreams", [])
+                if not audio_streams:
+                    continue
+
+                # Sort by bitrate descending
+                audio_streams.sort(key=lambda s: s.get("bitrate", 0), reverse=True)
+                stream_url = audio_streams[0].get("url")
+                if not stream_url:
+                    continue
+
+                logger.info(f"Piped stream URL resolved ({instance}): {data.get('title')}")
+                return {
+                    "id": video_id,
+                    "title": data.get("title") or title_hint or "Unknown",
+                    "duration": data.get("duration", 0),
+                    "uploader": data.get("uploader") or uploader_hint or "Unknown Artist",
+                    "stream_url": stream_url,
+                    "url": f"https://www.youtube.com/watch?v={video_id}",
+                    "thumbnail": f"https://img.youtube.com/vi/{video_id}/mqdefault.jpg",
+                    "http_headers": None,
+                }
+            except Exception as e:
+                logger.warning(f"Piped stream fetch failed ({instance}): {e}")
+        return None
+
+    def get_track_info(self, url, title_hint="", uploader_hint=""):
+        """Extract stream URL and metadata for a YouTube video URL.
+
+        Extraction strategy:
+          1. yt-dlp with android_embedded client
+          2. Invidious API (direct audio stream URLs)
+          3. Piped API (direct audio stream URLs)
+        """
         logger.info(f"Extracting info for URL: {url}")
+        video_id = self._extract_video_id(url)
+
+        # ── Strategy 1: yt-dlp ──────────────────────────────────────────────
         try:
             with yt_dlp.YoutubeDL(self.stream_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
-                if not info:
-                    logger.error("yt-dlp returned no info")
-                    return None
+                if info:
+                    stream_url = info.get("url")
+                    if not stream_url:
+                        formats = info.get("formats") or []
+                        audio_formats = [
+                            f for f in formats
+                            if f.get("url") and f.get("acodec") != "none"
+                            and f.get("vcodec") in (None, "", "none")
+                        ]
+                        if not audio_formats:
+                            audio_formats = [f for f in formats if f.get("url")]
+                        if audio_formats:
+                            audio_formats.sort(
+                                key=lambda f: f.get("abr") or f.get("tbr") or 0,
+                                reverse=True,
+                            )
+                            stream_url = audio_formats[0]["url"]
 
-                stream_url = info.get("url")
-                if not stream_url:
-                    formats = info.get("formats") or []
-                    audio_formats = [
-                        f for f in formats
-                        if f.get("url") and f.get("acodec") != "none"
-                        and f.get("vcodec") in (None, "", "none")
-                    ]
-                    if not audio_formats:
-                        audio_formats = [f for f in formats if f.get("url")]
-                    if audio_formats:
-                        audio_formats.sort(
-                            key=lambda f: f.get("abr") or f.get("tbr") or 0,
-                            reverse=True,
-                        )
-                        stream_url = audio_formats[0]["url"]
-
-                if not stream_url:
-                    logger.error("Could not find a usable stream URL in yt-dlp response")
-                    return None
-
-                logger.info(f"Resolved stream URL for: {info.get('title')}")
-                return {
-                    "id": info.get("id"),
-                    "title": info.get("title"),
-                    "duration": info.get("duration", 0),
-                    "uploader": info.get("uploader", "Unknown Artist"),
-                    "stream_url": stream_url,
-                    "url": url,
-                    "thumbnail": info.get("thumbnail")
-                        or f"https://img.youtube.com/vi/{info.get('id')}/mqdefault.jpg",
-                    "http_headers": info.get("http_headers"),
-                }
+                    if stream_url:
+                        logger.info(f"yt-dlp resolved stream for: {info.get('title')}")
+                        return {
+                            "id": info.get("id"),
+                            "title": info.get("title"),
+                            "duration": info.get("duration", 0),
+                            "uploader": info.get("uploader", "Unknown Artist"),
+                            "stream_url": stream_url,
+                            "url": url,
+                            "thumbnail": info.get("thumbnail")
+                                or f"https://img.youtube.com/vi/{info.get('id')}/mqdefault.jpg",
+                            "http_headers": info.get("http_headers"),
+                        }
         except Exception as e:
-            logger.error(f"Error extracting track info: {e}")
+            logger.warning(f"yt-dlp stream extraction failed: {e}")
+
+        if not video_id:
+            logger.error("Could not parse video ID from URL — cannot use API fallbacks")
             return None
+
+        # ── Strategy 2: Invidious ────────────────────────────────────────────
+        logger.info(f"yt-dlp blocked for playback — trying Invidious API for {video_id}...")
+        result = self._get_stream_via_invidious(video_id, title_hint, uploader_hint)
+        if result:
+            return result
+
+        # ── Strategy 3: Piped ────────────────────────────────────────────────
+        logger.info(f"Invidious failed — trying Piped API for {video_id}...")
+        result = self._get_stream_via_piped(video_id, title_hint, uploader_hint)
+        if result:
+            return result
+
+        logger.error(f"All stream extraction strategies failed for {video_id}")
+        return None
 
     # ── Playback control ─────────────────────────────────────────────────────
 
