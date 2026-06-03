@@ -59,31 +59,56 @@ class AudioStreamer:
 
         # Dynamic cookies check to bypass cloud IP blocks (e.g. Render)
         import sys
-        
+
         # Check for YOUTUBE_COOKIES env variable first (Render/cloud deployment friendly)
         youtube_cookies_env = os.getenv("YOUTUBE_COOKIES")
         if youtube_cookies_env:
             try:
-                # Write to temp file inside backend/uploads or system temp folder
                 temp_cookies_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads")
                 os.makedirs(temp_cookies_dir, exist_ok=True)
                 temp_cookies_path = os.path.join(temp_cookies_dir, "cookies_env.txt")
                 with open(temp_cookies_path, "w", encoding="utf-8") as f:
                     f.write(youtube_cookies_env)
-                logger.info(f"Loaded YouTube cookies from YOUTUBE_COOKIES environment variable, saved to: {temp_cookies_path}")
+                logger.info(f"Loaded YouTube cookies from YOUTUBE_COOKIES env var")
                 _common_anti_bot['cookiefile'] = temp_cookies_path
             except Exception as cookies_err:
-                logger.error(f"Failed to write YOUTUBE_COOKIES environment variable: {cookies_err}")
+                logger.error(f"Failed to write YOUTUBE_COOKIES env var: {cookies_err}")
         else:
-            # Fallback to local cookies.txt file check
+            # Check for manual cookies.txt file
             if getattr(sys, 'frozen', False):
                 cookies_path = os.path.join(os.path.dirname(sys.executable), "cookies.txt")
             else:
                 cookies_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
 
             if os.path.exists(cookies_path):
-                logger.info(f"Using YouTube account cookies from: {cookies_path}")
+                logger.info(f"Using YouTube cookies from: {cookies_path}")
                 _common_anti_bot['cookiefile'] = cookies_path
+            else:
+                # Auto-detect browser cookies on local installs (Windows desktop).
+                # yt-dlp reads directly from the browser's cookie store — no manual
+                # export needed. Works as long as the user is logged into YouTube
+                # in any of these browsers.
+                _browsers = ['chrome', 'edge', 'firefox', 'brave', 'opera', 'chromium']
+                for _browser in _browsers:
+                    try:
+                        _test_opts = {
+                            'cookiesfrombrowser': (_browser, None, None, None),
+                            'quiet': True, 'no_warnings': True,
+                        }
+                        with yt_dlp.YoutubeDL(_test_opts) as _ydl:
+                            _jar = _ydl.cookiejar
+                            _yt_cookies = [
+                                c for c in _jar
+                                if 'youtube.com' in c.domain or 'google.com' in c.domain
+                            ]
+                        if _yt_cookies:
+                            _common_anti_bot['cookiesfrombrowser'] = (_browser, None, None, None)
+                            logger.info(
+                                f"Auto-detected {len(_yt_cookies)} YouTube cookies from {_browser}"
+                            )
+                            break
+                    except Exception:
+                        pass  # browser not installed or no cookies
 
         # Proxy check (helpful for Render/datacenter IP bans)
         youtube_proxy_env = os.getenv("YOUTUBE_PROXY") or os.getenv("PROXY_URL")
@@ -91,7 +116,7 @@ class AudioStreamer:
             logger.info(f"Routing YouTube traffic via proxy: {youtube_proxy_env}")
             _common_anti_bot['proxy'] = youtube_proxy_env
 
-        # Options for searching — use extract_flat=True for speed; avoids full
+        # Options for searching — use extract_flat for speed; avoids full
         # format resolution which is a second choke-point for bot detection.
         self.search_opts = {
             **_common_anti_bot,
@@ -104,7 +129,8 @@ class AudioStreamer:
             'ignoreerrors': True,           # skip unplayable/age-gated entries silently
         }
 
-        # Options for extracting a real stream URL — needs full format resolution
+        # Options for extracting a real stream URL — try ios first (very low bot detection),
+        # then android_embedded, then tv_embedded, then android as last yt-dlp attempt.
         self.stream_opts = {
             **_common_anti_bot,
             'format': 'bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio/best',
@@ -113,6 +139,12 @@ class AudioStreamer:
             'no_warnings': True,
             'skip_download': True,
             'ignoreerrors': True,
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['ios', 'mweb', 'android_embedded', 'tv_embedded', 'android'],
+                    'player_skip': ['webpage', 'configs'],
+                }
+            },
         }
 
     def _build_track_entry(self, video_id, title, duration, uploader):
@@ -396,6 +428,9 @@ class AudioStreamer:
             "https://pipedapi.adminforge.de",
             "https://pipedapi.coldify.de",
             "https://piped-api.garudalinux.org",
+            "https://pipedapi.tokhmi.xyz",
+            "https://api.piped.projectsegfau.lt",
+            "https://pipedapi.moomoo.me",
         ]
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         for instance in piped_instances:
