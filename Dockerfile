@@ -13,11 +13,12 @@ RUN npm run build
 # ==========================================
 FROM python:3.11-slim AS backend-runner
 
-# Install system dependencies (ffmpeg and curl)
+# Install system dependencies (ffmpeg, curl, ca-certificates, and unzip)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     curl \
     ca-certificates \
+    unzip \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Deno (required by yt-dlp to solve modern YouTube cryptographic signatures)
