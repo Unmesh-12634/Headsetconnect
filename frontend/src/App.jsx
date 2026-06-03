@@ -52,7 +52,7 @@ const hasVideoSupport = (track) => {
 
 const getYouTubeId = (url) => {
   if (!url) return null;
-  const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=)([^#\&\?]*).*/;
+  const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
   const match = url.match(regExp);
   return (match && match[2].length === 11) ? match[2] : null;
 };
@@ -527,6 +527,7 @@ function SyncedVideoPlayer({ track, isPlaying, progress, latency, onClose, onTog
       }
       setYtPlayer(null);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [track.url, isYouTube]);
 
   useEffect(() => {
@@ -550,9 +551,12 @@ function SyncedVideoPlayer({ track, isPlaying, progress, latency, onClose, onTog
       const diff = Math.abs(ytTime - videoTargetTime);
       if (diff > 0.4) {
         ytPlayer.seekTo(videoTargetTime, true);
-        setIsLagging(true);
+        const lagTimer = setTimeout(() => setIsLagging(true), 0);
         const timer = setTimeout(() => setIsLagging(false), 300);
-        return () => clearTimeout(timer);
+        return () => {
+          clearTimeout(lagTimer);
+          clearTimeout(timer);
+        };
       }
     } catch (e) {
       console.warn("YouTube progress sync error:", e);
@@ -692,13 +696,13 @@ export default function App() {
 
   useEffect(() => {
     if (showSettingsModal) {
-      setTempHost(backendHost);
+      setTimeout(() => setTempHost(backendHost), 0);
     }
   }, [showSettingsModal, backendHost]);
 
   useEffect(() => {
     if (currentTrack && !hasVideoSupport(currentTrack)) {
-      setShowVideo(false);
+      setTimeout(() => setShowVideo(false), 0);
     }
   }, [currentTrack]);
   const [swipeStates, setSwipeStates] = useState({}); // { trackId: translateX }
