@@ -47,11 +47,12 @@ class AudioStreamer:
                 'Accept-Language': 'en-US,en;q=0.9',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
             },
-            # Use tv_embedded first (no bot check), then android fallback
+            # android_embedded is the most reliable client for bypassing bot checks
+            # on both search and playback. tv_embedded is kept as fallback.
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['tv_embedded', 'android', 'web'],
-                    'player_skip': ['configs'],
+                    'player_client': ['android_embedded', 'tv_embedded', 'android', 'web'],
+                    'player_skip': ['webpage', 'configs', 'js'],
                 }
             },
         }
@@ -90,15 +91,17 @@ class AudioStreamer:
             logger.info(f"Routing YouTube traffic via proxy: {youtube_proxy_env}")
             _common_anti_bot['proxy'] = youtube_proxy_env
 
-        # Options for searching — fast, minimal extraction
+        # Options for searching — use extract_flat=True for speed; avoids full
+        # format resolution which is a second choke-point for bot detection.
         self.search_opts = {
             **_common_anti_bot,
             'format': 'bestaudio/best',
             'noplaylist': True,
             'quiet': True,
             'no_warnings': True,
-            'extract_flat': False,
+            'extract_flat': 'in_playlist',  # only fetch video metadata, not stream URLs
             'skip_download': True,
+            'ignoreerrors': True,           # skip unplayable/age-gated entries silently
         }
 
         # Options for extracting a real stream URL — needs full format resolution
@@ -109,62 +112,221 @@ class AudioStreamer:
             'quiet': True,
             'no_warnings': True,
             'skip_download': True,
+            'ignoreerrors': True,
         }
 
-    # ── YouTube search / info ────────────────────────────────────────────────
+    def _build_track_entry(self, video_id, title, duration, uploader):
+        """Build a standard track metadata dict from components."""
+        return {
+            "id": video_id,
+            "title": title,
+            "duration": duration,
+            "uploader": uploader or "Unknown Artist",
+            "url": f"https://www.youtube.com/watch?v={video_id}",
+            "thumbnail": f"https://img.youtube.com/vi/{video_id}/mqdefault.jpg",
+        }
 
-    def search_youtube(self, query):
-        """Search YouTube or resolve direct URL, return metadata for top matches."""
-        logger.info(f"Searching YouTube for: {query}")
+    def search_invidious_fallback(self, query):
+        """Fallback to searching via Invidious public instances if yt-dlp is blocked."""
+        import urllib.parse
+        import urllib.request
+        import json
+        import re
+
+        # Expanded list of active Invidious instances (checked June 2025)
+        instances = [
+            "https://yewtu.be",
+            "https://invidious.flokinet.to",
+            "https://invidious.projectsegfau.lt",
+            "https://inv.tux.im",
+            "https://invidious.privacydev.net",
+            "https://vid.priv.au",
+            "https://invidious.perennialte.ch",
+            "https://invidious.io.lol",
+        ]
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+
+        video_id_match = re.search(
+            r'(?:v=|\/embed\/|\/v\/|youtu\.be\/|\/watch\?v=|&v=)([a-zA-Z0-9_-]{11})', query
+        )
+        video_id = video_id_match.group(1) if video_id_match else None
+
+        if video_id:
+            for instance in instances:
+                try:
+                    req = urllib.request.Request(
+                        f"{instance}/api/v1/videos/{video_id}", headers=headers
+                    )
+                    with urllib.request.urlopen(req, timeout=6) as resp:
+                        item = json.loads(resp.read().decode('utf-8'))
+                        logger.info(f"Invidious video info OK ({instance})")
+                        return [self._build_track_entry(
+                            video_id,
+                            item.get("title", "Unknown"),
+                            item.get("lengthSeconds", 0),
+                            item.get("author"),
+                        )]
+                except Exception as e:
+                    logger.warning(f"Invidious {instance} video info failed: {e}")
+        else:
+            encoded_query = urllib.parse.quote(query)
+            for instance in instances:
+                try:
+                    req = urllib.request.Request(
+                        f"{instance}/api/v1/search?q={encoded_query}&type=video",
+                        headers=headers,
+                    )
+                    with urllib.request.urlopen(req, timeout=6) as resp:
+                        data = json.loads(resp.read().decode('utf-8'))
+                        results = [
+                            self._build_track_entry(
+                                item.get("videoId"),
+                                item.get("title", "Unknown"),
+                                item.get("lengthSeconds", 0),
+                                item.get("author"),
+                            )
+                            for item in data[:5]
+                            if item.get("type") == "video" and item.get("videoId")
+                        ]
+                        if results:
+                            logger.info(f"Invidious search OK ({instance}): {len(results)} results")
+                            return results
+                except Exception as e:
+                    logger.warning(f"Invidious {instance} search failed: {e}")
+
+        logger.warning("All Invidious instances failed. Trying Piped API fallback...")
+        return self.search_piped_fallback(query)
+
+    def search_piped_fallback(self, query):
+        """Last-resort fallback using Piped.video public API instances."""
+        import urllib.parse
+        import urllib.request
+        import json
+        import re
+
+        piped_instances = [
+            "https://pipedapi.kavin.rocks",
+            "https://pipedapi.adminforge.de",
+            "https://pipedapi.coldify.de",
+            "https://piped-api.garudalinux.org",
+        ]
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        encoded_query = urllib.parse.quote(query)
+
+        for instance in piped_instances:
+            try:
+                req = urllib.request.Request(
+                    f"{instance}/search?q={encoded_query}&filter=videos",
+                    headers=headers,
+                )
+                with urllib.request.urlopen(req, timeout=6) as resp:
+                    data = json.loads(resp.read().decode('utf-8'))
+                    items = data.get("items", [])
+                    results = []
+                    for item in items[:5]:
+                        v_url = item.get("url", "")
+                        # Piped returns /watch?v=VIDEO_ID format
+                        vid_match = re.search(r'[?&]v=([a-zA-Z0-9_-]{11})', v_url)
+                        if not vid_match:
+                            continue
+                        v_id = vid_match.group(1)
+                        results.append(self._build_track_entry(
+                            v_id,
+                            item.get("title", "Unknown"),
+                            item.get("duration", 0),
+                            item.get("uploaderName"),
+                        ))
+                    if results:
+                        logger.info(f"Piped search OK ({instance}): {len(results)} results")
+                        return results
+            except Exception as e:
+                logger.warning(f"Piped instance {instance} failed: {e}")
+
+        logger.error("All fallback search attempts exhausted (yt-dlp + Invidious + Piped).")
+        return []
+
+    def _parse_ydl_entries(self, info):
+        """Extract a list of track dicts from a yt-dlp info dict."""
+        entries = info.get("entries") or [info]
+        results = []
+        for entry in entries[:5]:
+            if not entry or not entry.get("id"):
+                continue
+            results.append({
+                "id": entry.get("id"),
+                "title": entry.get("title") or "Unknown",
+                "duration": entry.get("duration", 0),
+                "uploader": entry.get("uploader") or entry.get("channel") or "Unknown Artist",
+                "url": f"https://www.youtube.com/watch?v={entry.get('id')}",
+                "thumbnail": entry.get("thumbnail")
+                    or f"https://img.youtube.com/vi/{entry.get('id')}/mqdefault.jpg",
+            })
+        return results
+
+    def _ydl_search(self, search_prefix, query):
+        """Try a single yt-dlp search prefix (e.g. 'ytsearch5' or 'ytmsearch5').
+        Returns a list of track dicts, or empty list on failure."""
         try:
             with yt_dlp.YoutubeDL(self.search_opts) as ydl:
-                query_str = query.strip()
-                is_url = (
-                    query_str.startswith("http://")
-                    or query_str.startswith("https://")
-                    or "youtube.com" in query_str
-                    or "youtu.be" in query_str
-                )
-                if is_url:
-                    info = ydl.extract_info(query_str, download=False)
-                    if not info:
-                        return []
-                    entries = info.get("entries") or [info]
-                    results = []
-                    for entry in entries[:5]:
-                        if not entry:
-                            continue
-                        results.append({
-                            "id": entry.get("id"),
-                            "title": entry.get("title"),
-                            "duration": entry.get("duration", 0),
-                            "uploader": entry.get("uploader", "Unknown Artist"),
-                            "url": f"https://www.youtube.com/watch?v={entry.get('id')}",
-                            "thumbnail": entry.get("thumbnail")
-                                or f"https://img.youtube.com/vi/{entry.get('id')}/mqdefault.jpg",
-                        })
-                    return results
-                else:
-                    res = ydl.extract_info(f"ytsearch5:{query}", download=False)
-                    if not res or 'entries' not in res:
-                        return []
-                    results = []
-                    for entry in res['entries']:
-                        if not entry:
-                            continue
-                        results.append({
-                            "id": entry.get("id"),
-                            "title": entry.get("title"),
-                            "duration": entry.get("duration", 0),
-                            "uploader": entry.get("uploader", "Unknown Artist"),
-                            "url": f"https://www.youtube.com/watch?v={entry.get('id')}",
-                            "thumbnail": entry.get("thumbnail")
-                                or f"https://img.youtube.com/vi/{entry.get('id')}/mqdefault.jpg",
-                        })
-                    return results
+                res = ydl.extract_info(f"{search_prefix}:{query}", download=False)
+                if res and 'entries' in res:
+                    results = self._parse_ydl_entries(res)
+                    if results:
+                        return results
         except Exception as e:
-            logger.error(f"Error searching YouTube: {e}")
-            return []
+            logger.warning(f"yt-dlp search failed with prefix '{search_prefix}': {e}")
+        return []
+
+    def search_youtube(self, query):
+        """Search YouTube or resolve direct URL, return metadata for top matches.
+
+        Search strategy (most to least reliable):
+          1. Direct URL → yt-dlp extraction
+          2. ytsearch5 (YouTube Web) via android_embedded client
+          3. ytmsearch5 (YouTube Music) — different API endpoint, often not bot-blocked
+          4. Invidious public API instances
+          5. Piped public API instances
+        """
+        logger.info(f"Searching YouTube for: {query}")
+        query_str = query.strip()
+        is_url = (
+            query_str.startswith("http://")
+            or query_str.startswith("https://")
+            or "youtube.com" in query_str
+            or "youtu.be" in query_str
+        )
+
+        if is_url:
+            try:
+                with yt_dlp.YoutubeDL(self.search_opts) as ydl:
+                    info = ydl.extract_info(query_str, download=False)
+                    if info:
+                        results = self._parse_ydl_entries(info)
+                        if results:
+                            return results
+            except Exception as e:
+                logger.warning(f"yt-dlp URL extraction failed: {e}")
+            # URL extraction failed — fall through to Invidious with video ID
+            return self.search_invidious_fallback(query_str)
+
+        # ── Keyword search: try multiple strategies in order ─────────────────
+
+        # Strategy 1: ytsearch (standard YouTube search)
+        results = self._ydl_search("ytsearch5", query_str)
+        if results:
+            logger.info(f"ytsearch5 returned {len(results)} results")
+            return results
+
+        # Strategy 2: YouTube Music search (separate API endpoint, less bot-filtered)
+        logger.info("ytsearch5 failed — trying YouTube Music (ytmsearch5)...")
+        results = self._ydl_search("ytmsearch5", query_str)
+        if results:
+            logger.info(f"ytmsearch5 returned {len(results)} results")
+            return results
+
+        # Strategy 3: Invidious + Piped fallbacks
+        logger.info("yt-dlp search failed entirely — falling back to Invidious/Piped API...")
+        return self.search_invidious_fallback(query_str)
 
     def get_track_info(self, url):
         """Extract stream url and metadata for a direct YouTube URL."""
