@@ -397,7 +397,7 @@ function DeviceCard({ device, isNew, calibrationState, onToggle, onVolume, onDel
 
 // ─── SyncedVideoPlayer ───────────────────────────────────────────────────────
 
-function SyncedVideoPlayer({ track, isPlaying, progress, latency, onClose, onTogglePlay, onSeek, backendHost, cloudMode, onProgress, ytDirectMode }) {
+function SyncedVideoPlayer({ track, isPlaying, progress, latency, onClose, onTogglePlay, onSeek, backendHost, cloudMode, onProgress, ytDirectMode, visible }) {
   const isYouTube = !track.is_local;
   const videoRef = useRef(null);
   const containerRef = useRef(null);
@@ -407,6 +407,18 @@ function SyncedVideoPlayer({ track, isPlaying, progress, latency, onClose, onTog
   const [isLagging, setIsLagging] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const isProgrammaticSeekRef = useRef(false);
+
+  const visibilityStyles = visible ? {} : {
+    position: 'absolute',
+    left: '-9999px',
+    top: '-9999px',
+    width: '1px',
+    height: '1px',
+    opacity: 0.001,
+    overflow: 'hidden',
+    pointerEvents: 'none',
+    zIndex: -9999,
+  };
 
   // Target time for the video player (adjusted for headset latency)
   const videoTargetTime = Math.max(0, progress - (latency / 1000.0));
@@ -647,14 +659,14 @@ function SyncedVideoPlayer({ track, isPlaying, progress, latency, onClose, onTog
   const sliderPercent = ((videoTargetTime / (track.duration || 100)) * 100);
 
   return (
-    <div className="video-overlay-backdrop">
+    <div className="video-overlay-backdrop" style={visibilityStyles}>
       <div className="video-theater-container" ref={containerRef}>
         <div className="video-theater-header">
           <div className="video-title-wrap">
             <Tv size={16} className="text-cyan" />
             <h3>{track.title}</h3>
           </div>
-          <button className="btn-ghost-sm" onClick={onClose}>Close Theater</button>
+          <button className="btn-ghost-sm" onClick={onClose}>Minimize to Background</button>
         </div>
 
         <div className="video-theater-body">
@@ -732,8 +744,8 @@ function SyncedVideoPlayer({ track, isPlaying, progress, latency, onClose, onTog
                   <button className="video-hud-icon-btn" onClick={toggleFullscreen} title={isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}>
                     {isFullscreen ? <Minimize size={16} /> : <Maximize size={16} />}
                   </button>
-                  <button className="video-hud-icon-btn close-btn" onClick={onClose} title="Close Theater">
-                    <span>Close</span>
+                  <button className="video-hud-icon-btn close-btn" onClick={onClose} title="Minimize to Background">
+                    <span>Minimize</span>
                   </button>
                 </div>
               </div>
@@ -1886,7 +1898,7 @@ export default function App() {
 
       </div>
 
-      {showVideo && currentTrack && hasVideoSupport(currentTrack) && (
+      {currentTrack && hasVideoSupport(currentTrack) && (
         <SyncedVideoPlayer
           track={currentTrack}
           isPlaying={isPlaying}
@@ -1899,6 +1911,7 @@ export default function App() {
           cloudMode={cloudMode}
           onProgress={(t) => setProgress(t)}
           ytDirectMode={ytDirectMode}
+          visible={showVideo}
         />
       )}
 
