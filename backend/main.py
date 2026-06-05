@@ -219,6 +219,21 @@ class ConnectionManager:
         for conn in to_remove:
             self.disconnect(conn)
 
+    async def broadcast_bytes(self, payload: bytes):
+        if not self.active_connections:
+            return
+        results = await asyncio.gather(
+            *[conn.send_bytes(payload) for conn in self.active_connections],
+            return_exceptions=True,
+        )
+        # Remove connections that errored
+        to_remove = [
+            conn for conn, result in zip(self.active_connections, results)
+            if isinstance(result, Exception)
+        ]
+        for conn in to_remove:
+            self.disconnect(conn)
+
 
 manager = ConnectionManager()
 
@@ -244,7 +259,23 @@ def broadcast_state_sync():
     except Exception as e:
         logger.error(f"Failed to broadcast state from callback: {e}")
 
+
+def broadcast_audio_chunk(numpy_data):
+    """Callback triggered from backend AudioEngine when raw PCM audio frames are decoded.
+    Broadcasts the raw audio bytes as a binary WebSocket message to all clients in cloud mode.
+    """
+    if not PORTAUDIO_AVAILABLE:
+        try:
+            raw_bytes = numpy_data.tobytes()
+            global main_loop
+            if main_loop and main_loop.is_running():
+                asyncio.run_coroutine_threadsafe(manager.broadcast_bytes(raw_bytes), main_loop)
+        except Exception as e:
+            logger.error(f"Failed to broadcast audio chunk: {e}")
+
+
 streamer.on_state_changed = broadcast_state_sync
+audio_engine.on_audio_data = broadcast_audio_chunk
 
 
 # ── State snapshot ───────────────────────────────────────────────────────────
@@ -389,18 +420,6 @@ async def websocket_endpoint(websocket: WebSocket):
                     logger.info(f"Playing track: {track.get('title')}")
                     if track.get("is_local"):
                         streamer.play_track(track)
-                        await manager.broadcast(get_system_state())
-                    elif not PORTAUDIO_AVAILABLE:
-                        # Cloud/headless mode: no audio hardware available on this server.
-                        # Skip yt-dlp stream extraction (blocked by YouTube on datacenter IPs).
-                        # Signal the frontend to handle YouTube playback directly via IFrame API.
-                        logger.info(f"Cloud mode: delegating YouTube playback to frontend IFrame for: {track.get('title')}")
-                        streamer.current_track = track
-                        audio_engine.is_playing = True
-                        await websocket.send_text(json.dumps({
-                            "type": "youtube_play_direct",
-                            "track": track,
-                        }))
                         await manager.broadcast(get_system_state())
                     else:
                         loop = asyncio.get_running_loop()

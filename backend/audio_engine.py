@@ -286,6 +286,8 @@ class AudioEngine:
         self.buffer_lock = threading.Lock()
         self.sample_rate = 44100
         self.is_playing = False
+        self.on_audio_data = None
+        self._last_play_time = 0.0
         # Devices the user explicitly disconnected — keyed by NAME (stable across rescans)
         self._user_disconnected: set = set()
         # True after first websocket connects — new hot-plugged devices stay inactive
@@ -780,6 +782,11 @@ class AudioEngine:
                     with dev.lock:
                         dev.master_buffer = self.master_buffer
 
+            on_data_cb = getattr(self, 'on_audio_data', None)
+
+        if on_data_cb:
+            on_data_cb(numpy_data)
+
     def clear_buffer(self, keep_seek_offset=False):
         with self.buffer_lock:
             self.master_buffer = np.empty((0, 2), dtype='float32')
@@ -798,6 +805,8 @@ class AudioEngine:
             return
         self.is_playing = True
         logger.info("Master playback started")
+        if not PORTAUDIO_AVAILABLE:
+            self._last_play_time = time.time()
         with self.buffer_lock:
             for dev in self.devices.values():
                 if dev.active:
@@ -808,11 +817,21 @@ class AudioEngine:
             return
         self.is_playing = False
         logger.info("Master playback paused")
+        if not PORTAUDIO_AVAILABLE:
+            now = time.time()
+            self.seek_offset_seconds += (now - self._last_play_time)
+            self._last_play_time = now
         for dev in self.devices.values():
             dev.stop_playback(preserve_cursor=True)
 
     def get_play_progress(self):
         """Return the current playback position in seconds."""
+        if not PORTAUDIO_AVAILABLE:
+            if self.is_playing:
+                now = time.time()
+                return self.seek_offset_seconds + (now - self._last_play_time)
+            return self.seek_offset_seconds
+
         active_devices = [d for d in self.devices.values() if d.active and d.thread]
         if not active_devices:
             return self.seek_offset_seconds
@@ -827,6 +846,8 @@ class AudioEngine:
         logger.info(f"Seeking to {seconds}s...")
         was_playing = self.is_playing
         self.seek_offset_seconds = seconds
+        if not PORTAUDIO_AVAILABLE:
+            self._last_play_time = time.time()
         self.clear_buffer(keep_seek_offset=True)
         streamer.play_track(streamer.current_track, start_seconds=seconds, keep_seek_offset=True)
         if not was_playing:

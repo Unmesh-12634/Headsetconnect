@@ -654,33 +654,46 @@ class AudioStreamer:
                 self.audio_engine.play()
 
             while not self.stop_event.is_set():
+                from audio_engine import PORTAUDIO_AVAILABLE
+                # In cloud mode, pause decoding if master is paused
+                if not PORTAUDIO_AVAILABLE and not self.audio_engine.is_playing:
+                    time.sleep(0.05)
+                    continue
+
                 # ── Buffer regulation ──────────────────────────────────────
                 # Measure how far ahead we are versus the SLOWEST active device.
                 # Using the slowest (min cursor) guards against one device being
                 # paused/failed and causing runaway buffering.
                 total_buffered = len(self.audio_engine.master_buffer) / self.sample_rate
 
-                active_devices = [
-                    d for d in self.audio_engine.devices.values()
-                    if d.active and d.thread and d.thread.is_alive()
-                ]
-                if active_devices:
-                    min_cursor = min(d.cursor for d in active_devices)
-                    slowest_progress = self.audio_engine.seek_offset_seconds + (
-                        min_cursor / self.sample_rate
-                    )
+                if not PORTAUDIO_AVAILABLE:
+                    slowest_progress = self.audio_engine.get_play_progress()
+                    cached_ahead = total_buffered - slowest_progress
+                    if cached_ahead > 5.0:
+                        time.sleep(PACE_CHECK_SLEEP)
+                        continue
                 else:
-                    # No active threads yet (waiting for user to press Play).
-                    # Use total buffered as the progress reference so we don't
-                    # over-buffer before playback starts.
-                    slowest_progress = total_buffered
+                    active_devices = [
+                        d for d in self.audio_engine.devices.values()
+                        if d.active and d.thread and d.thread.is_alive()
+                    ]
+                    if active_devices:
+                        min_cursor = min(d.cursor for d in active_devices)
+                        slowest_progress = self.audio_engine.seek_offset_seconds + (
+                            min_cursor / self.sample_rate
+                        )
+                    else:
+                        # No active threads yet (waiting for user to press Play).
+                        # Use total buffered as the progress reference so we don't
+                        # over-buffer before playback starts.
+                        slowest_progress = total_buffered
 
-                cached_ahead = total_buffered - slowest_progress
+                    cached_ahead = total_buffered - slowest_progress
 
-                if cached_ahead > MAX_BUFFER_SECONDS:
-                    # Throttle: wait a bit then re-check rather than reading
-                    time.sleep(PACE_CHECK_SLEEP)
-                    continue
+                    if cached_ahead > MAX_BUFFER_SECONDS:
+                        # Throttle: wait a bit then re-check rather than reading
+                        time.sleep(PACE_CHECK_SLEEP)
+                        continue
 
                 # ── Read and decode ────────────────────────────────────────
                 raw_data = process.stdout.read(bytes_to_read)

@@ -142,7 +142,7 @@ const getLocalVideoSrc = (track, backendHost) => {
 
 // ─── DeviceCard ───────────────────────────────────────────────────────────────
 
-function DeviceCard({ device, isNew, calibrationState, onToggle, onVolume, onDelay, onCalibrate, onResetProfile }) {
+function DeviceCard({ device, isNew, calibrationState, onToggle, onVolume, onDelay, onCalibrate, onResetProfile, cloudMode }) {
   const [expanded, setExpanded]     = useState(false);
   const [localVol, setLocalVol]     = useState(device.volume);
   const [localDelay, setLocalDelay] = useState(device.delay_ms);
@@ -281,110 +281,112 @@ function DeviceCard({ device, isNew, calibrationState, onToggle, onVolume, onDel
           </div>
 
           {/* Calibration HUD Section */}
-          <div className="calibration-section">
-            <div className="cal-section-header">
-              <span className="cal-title">Auto Calibration</span>
-              {device.latency_ms > 0 && (
-                <span className="cal-badge success">
-                  <Activity size={10} />
-                  Calibrated ({Math.round(device.latency_ms)}ms)
-                </span>
+          {!cloudMode && (
+            <div className="calibration-section">
+              <div className="cal-section-header">
+                <span className="cal-title">Auto Calibration</span>
+                {device.latency_ms > 0 && (
+                  <span className="cal-badge success">
+                    <Activity size={10} />
+                    Calibrated ({Math.round(device.latency_ms)}ms)
+                  </span>
+                )}
+              </div>
+              
+              {(!calibrationState || calibrationState.status === 'idle') && (
+                <div className="cal-idle">
+                  <p className="cal-desc">
+                    Auto-syncs this headset by playing a frequency sweep chirp and capturing it with your default microphone.
+                  </p>
+                  <div className="cal-actions" style={{ marginTop: '8px' }}>
+                    <button
+                      className="btn-cal-primary"
+                      onClick={() => onCalibrate(device.index)}
+                    >
+                      <Zap size={12} />
+                      Auto Calibrate
+                    </button>
+                    {device.latency_ms > 0 && (
+                      <button
+                        className="btn-cal-secondary"
+                        onClick={() => onResetProfile(device.index)}
+                      >
+                        Reset Profile
+                      </button>
+                    )}
+                  </div>
+                </div>
               )}
-            </div>
-            
-            {(!calibrationState || calibrationState.status === 'idle') && (
-              <div className="cal-idle">
-                <p className="cal-desc">
-                  Auto-syncs this headset by playing a frequency sweep chirp and capturing it with your default microphone.
-                </p>
-                <div className="cal-actions" style={{ marginTop: '8px' }}>
-                  <button
-                    className="btn-cal-primary"
-                    onClick={() => onCalibrate(device.index)}
-                  >
-                    <Zap size={12} />
-                    Auto Calibrate
-                  </button>
-                  {device.latency_ms > 0 && (
+              
+              {calibrationState && calibrationState.status === 'calibrating' && (
+                <div className="cal-terminal running">
+                  <div className="pulse-circle">
+                    <span className="pulse-core" />
+                    <span className="pulse-wave" />
+                  </div>
+                  <div className="terminal-lines">
+                    <div className="line font-mono text-amber">&gt; [SYS] PAUSING STREAMS...</div>
+                    <div className="line font-mono text-amber">&gt; [SYS] PLAYING SWEEP PULSE (150ms)...</div>
+                    <div className="line font-mono text-amber">&gt; [SYS] RECORDING MICROPHONE FEEDBACK...</div>
+                  </div>
+                </div>
+              )}
+
+              {calibrationState && calibrationState.status === 'success' && (
+                <div className="cal-terminal success-state">
+                  <div className="cal-result-info">
+                    <h5 className="text-green" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span className="dot green" /> Sync Successful!
+                    </h5>
+                    <p className="font-mono text-dim" style={{ marginTop: '3px' }}>
+                      Measured Latency: <strong>+{Math.round(calibrationState.latency)}ms</strong>
+                    </p>
+                    <p className="cal-note">Relative dynamic delay auto-applied.</p>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                    <button
+                      className="btn-cal-primary"
+                      style={{ background: 'var(--green)', color: '#050a14' }}
+                      disabled
+                    >
+                      Active
+                    </button>
+                    <button
+                      className="btn-cal-secondary small"
+                      onClick={() => onCalibrate(device.index)}
+                    >
+                      Recalibrate
+                    </button>
+                  </div>
+                </div>
+              )}
+              
+              {calibrationState && calibrationState.status === 'error' && (
+                <div className="cal-terminal error-state">
+                  <div className="cal-result-info">
+                    <h5 className="text-amber" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span className="dot amber" /> Calibration Failed
+                    </h5>
+                    <p className="cal-error-msg" style={{ marginTop: '4px', fontSize: '0.74rem', lineHeight: '1.4' }}>{calibrationState.errorMsg}</p>
+                  </div>
+                  <div className="cal-actions" style={{ marginTop: '8px' }}>
+                    <button
+                      className="btn-cal-primary error"
+                      onClick={() => onCalibrate(device.index)}
+                    >
+                      Retry
+                    </button>
                     <button
                       className="btn-cal-secondary"
                       onClick={() => onResetProfile(device.index)}
                     >
-                      Reset Profile
+                      Reset
                     </button>
-                  )}
+                  </div>
                 </div>
-              </div>
-            )}
-            
-            {calibrationState && calibrationState.status === 'calibrating' && (
-              <div className="cal-terminal running">
-                <div className="pulse-circle">
-                  <span className="pulse-core" />
-                  <span className="pulse-wave" />
-                </div>
-                <div className="terminal-lines">
-                  <div className="line font-mono text-amber">&gt; [SYS] PAUSING STREAMS...</div>
-                  <div className="line font-mono text-amber">&gt; [SYS] PLAYING SWEEP PULSE (150ms)...</div>
-                  <div className="line font-mono text-amber">&gt; [SYS] RECORDING MICROPHONE FEEDBACK...</div>
-                </div>
-              </div>
-            )}
-
-            {calibrationState && calibrationState.status === 'success' && (
-              <div className="cal-terminal success-state">
-                <div className="cal-result-info">
-                  <h5 className="text-green" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <span className="dot green" /> Sync Successful!
-                  </h5>
-                  <p className="font-mono text-dim" style={{ marginTop: '3px' }}>
-                    Measured Latency: <strong>+{Math.round(calibrationState.latency)}ms</strong>
-                  </p>
-                  <p className="cal-note">Relative dynamic delay auto-applied.</p>
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
-                  <button
-                    className="btn-cal-primary"
-                    style={{ background: 'var(--green)', color: '#050a14' }}
-                    disabled
-                  >
-                    Active
-                  </button>
-                  <button
-                    className="btn-cal-secondary small"
-                    onClick={() => onCalibrate(device.index)}
-                  >
-                    Recalibrate
-                  </button>
-                </div>
-              </div>
-            )}
-            
-            {calibrationState && calibrationState.status === 'error' && (
-              <div className="cal-terminal error-state">
-                <div className="cal-result-info">
-                  <h5 className="text-amber" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <span className="dot amber" /> Calibration Failed
-                  </h5>
-                  <p className="cal-error-msg" style={{ marginTop: '4px', fontSize: '0.74rem', lineHeight: '1.4' }}>{calibrationState.errorMsg}</p>
-                </div>
-                <div className="cal-actions" style={{ marginTop: '8px' }}>
-                  <button
-                    className="btn-cal-primary error"
-                    onClick={() => onCalibrate(device.index)}
-                  >
-                    Retry
-                  </button>
-                  <button
-                    className="btn-cal-secondary"
-                    onClick={() => onResetProfile(device.index)}
-                  >
-                    Reset
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -513,14 +515,9 @@ function SyncedVideoPlayer({ track, isPlaying, progress, latency, onClose, onTog
               event.target.destroy();
               return;
             }
-            // In cloud mode the YouTube IFrame IS the audio source — don't mute it.
-            // In local mode it's muted because audio comes from the headset engine.
-            if (!cloudMode) {
-              event.target.mute();
-            } else {
-              event.target.unMute();
-              event.target.setVolume(100);
-            }
+            // The YouTube player is always muted because audio playback is handled
+            // by either the backend AudioEngine (local mode) or Web Audio API (cloud mode).
+            event.target.mute();
             event.target.seekTo(videoTargetTime, true);
             if (isPlaying) {
               event.target.playVideo();
@@ -580,18 +577,7 @@ function SyncedVideoPlayer({ track, isPlaying, progress, latency, onClose, onTog
     }
   }, [videoTargetTime, ytPlayer, isYouTube]);
 
-  // In cloud mode: poll the YouTube IFrame's current time and report it upward
-  // so the main player progress bar stays in sync without backend audio streaming.
-  useEffect(() => {
-    if (!cloudMode || !isYouTube || !ytPlayer) return;
-    const interval = setInterval(() => {
-      try {
-        const t = ytPlayer.getCurrentTime();
-        if (t != null && onProgress) onProgress(t);
-      } catch (e) { /* ignore */ }
-    }, 500);
-    return () => clearInterval(interval);
-  }, [cloudMode, isYouTube, ytPlayer, onProgress]);
+
 
   const handleSliderSeek = (e) => {
     const time = parseFloat(e.target.value);
@@ -732,6 +718,214 @@ export default function App() {
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [tempHost, setTempHost] = useState(backendHost);
 
+  // ─── Web Audio API (Cloud Mode Streaming) ───────────────────────────────────
+  const [browserDevices, setBrowserDevices] = useState([]);
+  const [localProfiles, setLocalProfiles] = useState(() => {
+    try {
+      const saved = localStorage.getItem('hc_browser_profiles');
+      return saved ? JSON.parse(saved) : {};
+    } catch (e) {
+      return {};
+    }
+  });
+
+  const audioCtxRef = useRef(null);
+  const nextPlaybackTimeRef = useRef(0);
+  const activeSourcesRef = useRef([]);
+  const deviceNodesRef = useRef({});
+
+  // Helper to detect device connection type from browser label
+  const detectBrowserDeviceType = (label) => {
+    const lower = (label || '').toLowerCase();
+    if (lower.includes('bluetooth') || lower.includes('wireless') || lower.includes('buds') || lower.includes('airpods') || lower.includes('hands-free')) return 'Bluetooth';
+    if (lower.includes('usb')) return 'USB';
+    if (lower.includes('speaker') || lower.includes('realtek') || lower.includes('intel') || lower.includes('high definition')) return 'Speaker';
+    return 'Wired';
+  };
+
+  const updateBrowserDevices = async () => {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+      return;
+    }
+    try {
+      // Trigger temporary microphone request to grant label reading access
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true }).catch(() => null);
+      if (stream) {
+        stream.getTracks().forEach(t => t.stop()); // close microphone stream immediately
+      }
+      const allDevices = await navigator.mediaDevices.enumerateDevices();
+      const outputs = allDevices.filter(d => d.kind === 'audiooutput');
+      setBrowserDevices(outputs);
+    } catch (err) {
+      console.error("Failed browser device enumeration:", err);
+    }
+  };
+
+  const syncWebAudioDevices = async () => {
+    if (!cloudMode) return;
+    if (!audioCtxRef.current) {
+      audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 44100 });
+    }
+    const ctx = audioCtxRef.current;
+    
+    // Find active local browser devices
+    const activeDevs = browserDevices.filter(d => {
+      const profile = localProfiles[d.deviceId];
+      return profile && profile.active;
+    });
+
+    const newNodes = {};
+
+    for (const dev of activeDevs) {
+      const dId = dev.deviceId;
+      const profile = localProfiles[dId] || { volume: 1.0, delay_ms: 0.0 };
+
+      if (deviceNodesRef.current[dId]) {
+        // Update existing nodes
+        const nodes = deviceNodesRef.current[dId];
+        nodes.gainNode.gain.setValueAtTime(profile.volume, ctx.currentTime);
+        nodes.delayNode.delayTime.setValueAtTime(profile.delay_ms / 1000.0, ctx.currentTime);
+        newNodes[dId] = nodes;
+      } else {
+        // Build new nodes
+        const gainNode = ctx.createGain();
+        gainNode.gain.setValueAtTime(profile.volume, ctx.currentTime);
+
+        const delayNode = ctx.createDelay(1.0); // max delay 1s
+        delayNode.delayTime.setValueAtTime(profile.delay_ms / 1000.0, ctx.currentTime);
+
+        const destinationNode = ctx.createMediaStreamDestination();
+
+        const audioElement = new Audio();
+        audioElement.srcObject = destinationNode.stream;
+        audioElement.play().catch(e => console.warn("Local audio playback blocked by user interaction:", e));
+
+        if (typeof audioElement.setSinkId === 'function') {
+          try {
+            await audioElement.setSinkId(dId);
+            console.log(`Web Audio: sinkId set to ${dId} for ${dev.label}`);
+          } catch (e) {
+            console.error(`Web Audio: failed setSinkId to ${dId}:`, e);
+          }
+        }
+
+        gainNode.connect(delayNode);
+        delayNode.connect(destinationNode);
+
+        newNodes[dId] = {
+          gainNode,
+          delayNode,
+          destinationNode,
+          audioElement,
+        };
+      }
+    }
+
+    // Clean up deactivated nodes
+    Object.keys(deviceNodesRef.current).forEach(dId => {
+      if (!newNodes[dId]) {
+        const nodes = deviceNodesRef.current[dId];
+        try {
+          nodes.audioElement.pause();
+          nodes.audioElement.srcObject = null;
+          nodes.gainNode.disconnect();
+          nodes.delayNode.disconnect();
+        } catch (e) {}
+      }
+    });
+
+    deviceNodesRef.current = newNodes;
+  };
+
+  const handleIncomingAudioChunk = (arrayBuffer) => {
+    if (!audioCtxRef.current) {
+      audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 44100 });
+    }
+    const ctx = audioCtxRef.current;
+
+    const floatData = new Float32Array(arrayBuffer);
+    const numFrames = floatData.length / 2;
+    if (numFrames === 0) return;
+
+    const audioBuffer = ctx.createBuffer(2, numFrames, 44100);
+    const left = audioBuffer.getChannelData(0);
+    const right = audioBuffer.getChannelData(1);
+    for (let i = 0; i < numFrames; i++) {
+      left[i] = floatData[i * 2];
+      right[i] = floatData[i * 2 + 1];
+    }
+
+    const source = ctx.createBufferSource();
+    source.buffer = audioBuffer;
+
+    let connectedAny = false;
+    Object.values(deviceNodesRef.current).forEach(({ gainNode }) => {
+      source.connect(gainNode);
+      connectedAny = true;
+    });
+
+    if (!connectedAny) {
+      source.connect(ctx.destination);
+    }
+
+    let playTime = nextPlaybackTimeRef.current;
+    const now = ctx.currentTime;
+    if (playTime < now) {
+      playTime = now + 0.05; // 50ms scheduling gap to avoid pops
+    }
+    source.start(playTime);
+    nextPlaybackTimeRef.current = playTime + audioBuffer.duration;
+
+    activeSourcesRef.current.push(source);
+    source.onended = () => {
+      activeSourcesRef.current = activeSourcesRef.current.filter(s => s !== source);
+    };
+  };
+
+  // Reset/Clear buffers on seeks or track changes
+  const clearWebAudioBuffer = () => {
+    activeSourcesRef.current.forEach(src => {
+      try { src.stop(); } catch (e) {}
+    });
+    activeSourcesRef.current = [];
+    nextPlaybackTimeRef.current = 0;
+  };
+
+  // Sync browser devices to browser outputs
+  useEffect(() => {
+    if (cloudMode) {
+      updateBrowserDevices();
+    }
+  }, [cloudMode]);
+
+  // Sync Web Audio graph on changes
+  useEffect(() => {
+    if (cloudMode) {
+      syncWebAudioDevices();
+    }
+  }, [browserDevices, localProfiles, cloudMode]);
+
+  // Handle play/pause browser state changes
+  useEffect(() => {
+    if (!cloudMode) return;
+    const ctx = audioCtxRef.current;
+    if (!ctx) return;
+
+    if (isPlaying) {
+      if (ctx.state === 'suspended') {
+        ctx.resume();
+      }
+    } else {
+      if (ctx.state === 'running') {
+        ctx.suspend();
+      }
+      activeSourcesRef.current.forEach(src => {
+        try { src.stop(); } catch (e) {}
+      });
+      activeSourcesRef.current = [];
+    }
+  }, [isPlaying, cloudMode]);
+
   useEffect(() => {
     if (showSettingsModal) {
       setTimeout(() => setTempHost(backendHost), 0);
@@ -755,6 +949,7 @@ export default function App() {
     function connectWebSocket() {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const ws = new WebSocket(`${protocol}//${backendHost}/ws`);
+      ws.binaryType = 'arraybuffer';
       wsRef.current = ws;
 
       ws.onopen = () => {
@@ -762,6 +957,10 @@ export default function App() {
       };
 
       ws.onmessage = (evt) => {
+        if (evt.data instanceof ArrayBuffer) {
+          handleIncomingAudioChunk(evt.data);
+          return;
+        }
         try {
           const msg = JSON.parse(evt.data);
           if (msg.type === 'state_update') {
@@ -784,6 +983,10 @@ export default function App() {
             });
             setIsPlaying(msg.is_playing);
             setProgress(msg.progress || 0);
+            
+            if (msg.current_track?.id !== currentTrack?.id) {
+              clearWebAudioBuffer();
+            }
             setCurrentTrack(msg.current_track);
             setIsScanning(false);
             if (msg.cloud_mode !== undefined) setCloudMode(msg.cloud_mode);
@@ -829,7 +1032,7 @@ export default function App() {
 
     connectWebSocket();
     return () => { wsRef.current?.close(); clearTimeout(reconnectRef.current); };
-  }, [backendHost]);
+  }, [backendHost, currentTrack]);
 
   // ── Actions ─────────────────────────────────────────────────────────────────
 
@@ -841,9 +1044,13 @@ export default function App() {
   };
 
   const handleScan = () => {
-    setIsScanning(true);
-    send({ action: 'scan_devices' });
-    setTimeout(() => setIsScanning(false), 3000);
+    if (cloudMode) {
+      updateBrowserDevices();
+    } else {
+      setIsScanning(true);
+      send({ action: 'scan_devices' });
+      setTimeout(() => setIsScanning(false), 3000);
+    }
   };
 
   const handleSearch = (e) => {
@@ -853,10 +1060,10 @@ export default function App() {
     send({ action: 'search', query: musicQuery });
   };
 
-  const handlePlayTrack  = (track) => { send({ action: 'play_track', track }); setSearchResults([]); setMusicQuery(''); };
+  const handlePlayTrack  = (track) => { if (cloudMode) clearWebAudioBuffer(); send({ action: 'play_track', track }); setSearchResults([]); setMusicQuery(''); };
   const handleTogglePlay = ()       => send({ action: isPlaying ? 'pause' : 'play' });
   const handleStop       = ()       => send({ action: 'stop' });
-  const handleSeek       = (e)      => { const s = parseFloat(e.target.value); setProgress(s); send({ action: 'seek', seconds: s }); };
+  const handleSeek       = (e)      => { const s = parseFloat(e.target.value); setProgress(s); if (cloudMode) clearWebAudioBuffer(); send({ action: 'seek', seconds: s }); };
 
   const handleCalibrate = (idx) => {
     setCalibrationStates(prev => ({
@@ -873,6 +1080,55 @@ export default function App() {
       return ns;
     });
     send({ action: 'reset_profile', index: idx });
+  };
+
+  const handleToggleDevice = (idx, val) => {
+    if (cloudMode) {
+      setLocalProfiles(prev => {
+        const next = { ...prev, [idx]: { ...prev[idx], active: val } };
+        localStorage.setItem('hc_browser_profiles', JSON.stringify(next));
+        return next;
+      });
+    } else {
+      send({ action: 'toggle_device', index: idx, active: val });
+    }
+  };
+
+  const handleVolumeDevice = (idx, vol) => {
+    if (cloudMode) {
+      setLocalProfiles(prev => {
+        const next = { ...prev, [idx]: { ...prev[idx], volume: vol } };
+        localStorage.setItem('hc_browser_profiles', JSON.stringify(next));
+        return next;
+      });
+    } else {
+      send({ action: 'set_volume', index: idx, volume: vol });
+    }
+  };
+
+  const handleDelayDevice = (idx, ms) => {
+    if (cloudMode) {
+      setLocalProfiles(prev => {
+        const next = { ...prev, [idx]: { ...prev[idx], delay_ms: ms } };
+        localStorage.setItem('hc_browser_profiles', JSON.stringify(next));
+        return next;
+      });
+    } else {
+      send({ action: 'set_delay', index: idx, delay_ms: ms });
+    }
+  };
+
+  const handleResetBrowserProfile = (idx) => {
+    if (cloudMode) {
+      setLocalProfiles(prev => {
+        const next = { ...prev };
+        delete next[idx];
+        localStorage.setItem('hc_browser_profiles', JSON.stringify(next));
+        return next;
+      });
+    } else {
+      handleResetProfile(idx);
+    }
   };
 
   const handleDragOver = (e) => {
@@ -986,11 +1242,18 @@ export default function App() {
 
   // ── Computed ─────────────────────────────────────────────────────────────────
 
-  const activeCount     = devices.filter(d => d.active).length;
-  const activeDevices   = devices.filter(d => d.active);
-  const maxLatencyMs    = activeDevices.length > 0 
-    ? Math.max(...activeDevices.map(d => d.latency_ms || 0)) 
-    : 0;
+  const activeCount     = cloudMode
+    ? browserDevices.filter(d => localProfiles[d.deviceId]?.active).length
+    : devices.filter(d => d.active).length;
+    
+  const activeDevices   = cloudMode
+    ? browserDevices.filter(d => localProfiles[d.deviceId]?.active)
+    : devices.filter(d => d.active);
+
+  const maxLatencyMs    = cloudMode
+    ? (activeDevices.length > 0 ? Math.max(...activeDevices.map(d => localProfiles[d.deviceId]?.latency_ms || 0)) : 0)
+    : (activeDevices.length > 0 ? Math.max(...activeDevices.map(d => d.latency_ms || 0)) : 0);
+
   const filteredDevices = devices
     .filter(d => d.name.toLowerCase().includes(deviceSearch.toLowerCase()))
     .sort((a, b) => {
@@ -1000,6 +1263,23 @@ export default function App() {
       // 2. Secondary sort: Alphabetical by clean name
       return a.name.localeCompare(b.name);
     });
+
+  const displayedDevices = cloudMode
+    ? browserDevices.map(d => ({
+        index: d.deviceId,
+        name: d.label || 'Default Output Device',
+        volume: localProfiles[d.deviceId]?.volume ?? 1.0,
+        delay_ms: localProfiles[d.deviceId]?.delay_ms ?? 0.0,
+        latency_ms: localProfiles[d.deviceId]?.latency_ms ?? 0.0,
+        active: !!localProfiles[d.deviceId]?.active,
+        connection_type: detectBrowserDeviceType(d.label),
+      })).filter(d => d.name.toLowerCase().includes(deviceSearch.toLowerCase()))
+         .sort((a, b) => {
+           if (a.active && !b.active) return -1;
+           if (!a.active && b.active) return 1;
+           return a.name.localeCompare(b.name);
+         })
+    : filteredDevices;
 
   // ── Render ───────────────────────────────────────────────────────────────────
 
@@ -1416,7 +1696,7 @@ export default function App() {
             <div className="panel-title">
               <Bluetooth size={16} />
               <h2>Devices</h2>
-              {!cloudMode && <span className="badge">{filteredDevices.length}</span>}
+              <span className="badge">{displayedDevices.length}</span>
             </div>
             <div className="panel-head-actions">
               <div className="device-search-wrap">
@@ -1430,53 +1710,45 @@ export default function App() {
                   className="device-search-field"
                 />
               </div>
-              {!cloudMode && (
               <button
                 id="refresh-btn"
                 className={`icon-btn refresh-btn ${isScanning ? 'spinning' : ''}`}
                 onClick={handleScan}
                 disabled={isScanning}
-                title="Scan for new devices"
+                title={cloudMode ? "Scan local outputs" : "Scan for new devices"}
               >
                 <RefreshCw size={14} />
               </button>
-              )}
             </div>
           </div>
 
-          {!cloudMode && (
-            <p className="auto-detect-note">
-              <Headphones size={10} />
-              All playback devices listed · Auto-refreshes every 5s
-            </p>
-          )}
-
-
+          <p className="auto-detect-note">
+            <Headphones size={10} />
+            {cloudMode ? "All local browser outputs listed · Auto-refreshes on plug" : "All playback devices listed · Auto-refreshes every 5s"}
+          </p>
 
           {/* Scrollable device list */}
           <div className="device-grid">
-            {cloudMode ? (
+            {cloudMode && browserDevices.length === 0 ? (
               <div className="empty-state" style={{ padding: '2rem 1rem', textAlign: 'center' }}>
                 <Headphones size={38} style={{ opacity: 0.4, marginBottom: '1rem' }} />
-                <p style={{ fontWeight: 600, marginBottom: '6px' }}>Cloud Mode — No Local Devices</p>
-                <p className="hint" style={{ lineHeight: '1.5' }}>
-                  Headset routing requires the backend running on your <strong>local PC</strong>.<br />
-                  Run <code style={{ background: 'rgba(255,255,255,0.08)', padding: '1px 5px', borderRadius: '3px' }}>run_backend.bat</code> on your computer,
-                  then click the <strong>⚙ Settings</strong> icon and enter your PC's local IP (e.g. <code style={{ background: 'rgba(255,255,255,0.08)', padding: '1px 5px', borderRadius: '3px' }}>192.168.x.x:8000</code>).
+                <p style={{ fontWeight: 600, marginBottom: '6px' }}>Cloud Mode — No Local Outputs Found</p>
+                <p className="hint" style={{ lineHeight: '1.5', marginBottom: '1.2rem' }}>
+                  Please grant media/microphone permissions so the browser can enumerate and name your connected headsets.
                 </p>
                 <button
                   className="btn-outline"
-                  style={{ marginTop: '1rem', fontSize: '0.78rem' }}
-                  onClick={() => setShowSettingsModal(true)}
+                  style={{ fontSize: '0.8rem' }}
+                  onClick={handleScan}
                 >
-                  <Settings2 size={12} /> Open Connection Settings
+                  <RefreshCw size={12} /> Scan & Grant Permissions
                 </button>
               </div>
-            ) : filteredDevices.length === 0 ? (
+            ) : displayedDevices.length === 0 ? (
               <div className="empty-state">
                 <Bluetooth size={38} />
-                <p>{deviceSearch ? `No match for "${deviceSearch}"` : 'No Bluetooth headsets found'}</p>
-                <p className="hint">Pair headsets in Windows Bluetooth settings, then click refresh.</p>
+                <p>{deviceSearch ? `No match for "${deviceSearch}"` : 'No audio outputs found'}</p>
+                <p className="hint">Plug in headsets or turn on Bluetooth devices, then click refresh.</p>
                 {!deviceSearch && (
                   <button className="btn-outline" onClick={handleScan}>
                     <RefreshCw size={13} /> Scan Now
@@ -1484,17 +1756,18 @@ export default function App() {
                 )}
               </div>
             ) : (
-              filteredDevices.map(dev => (
+              displayedDevices.map(dev => (
                 <DeviceCard
                   key={dev.name}
                   device={dev}
                   isNew={hotPlugNames.has(dev.name) && !dev.active}
                   calibrationState={calibrationStates[dev.index]}
-                  onToggle={(idx, val) => send({ action: 'toggle_device', index: idx, active: val })}
-                  onVolume={(idx, vol) => send({ action: 'set_volume', index: idx, volume: vol })}
-                  onDelay={(idx, ms)  => send({ action: 'set_delay', index: idx, delay_ms: ms })}
+                  onToggle={handleToggleDevice}
+                  onVolume={handleVolumeDevice}
+                  onDelay={handleDelayDevice}
                   onCalibrate={handleCalibrate}
-                  onResetProfile={handleResetProfile}
+                  onResetProfile={handleResetBrowserProfile}
+                  cloudMode={cloudMode}
                 />
               ))
             )}
