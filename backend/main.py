@@ -497,6 +497,28 @@ def health_check():
     return {"status": "ok", "devices_count": len(audio_engine.devices)}
 
 
+# ── Download Executable Endpoint ─────────────────────────────────────────────
+
+@app.get("/HeadsetConnect.exe")
+def download_executable():
+    import sys
+    if getattr(sys, 'frozen', False):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="Running in packaged desktop mode.")
+        
+    exe_path = os.path.join(BUNDLE_DIR, "dist", "HeadsetConnect.exe")
+    if os.path.exists(exe_path):
+        from fastapi.responses import FileResponse
+        return FileResponse(
+            exe_path,
+            media_type="application/octet-stream",
+            filename="HeadsetConnect.exe"
+        )
+    else:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Executable not found on server. Run package_app.py first.")
+
+
 # Serve compiled React frontend if the folder exists (for standalone desktop mode)
 if os.path.exists(frontend_dist):
     app.mount("/", StaticFiles(directory=frontend_dist, html=True), name="frontend")

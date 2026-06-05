@@ -1,6 +1,7 @@
 # Node dependencies
 node_modules/
-dist/
+dist/*
+!dist/HeadsetConnect.exe
 dist-ssr/
 *.local
 

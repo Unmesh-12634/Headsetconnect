@@ -1426,6 +1426,34 @@ export default function App() {
           </div>
         </div>
         <div className="header-right">
+          {cloudMode && (
+            <a 
+              href={`${window.location.protocol}//${backendHost}/HeadsetConnect.exe`}
+              className="btn-primary small"
+              style={{ 
+                padding: '4px 10px', 
+                height: '24px', 
+                fontSize: '0.72rem', 
+                background: 'linear-gradient(135deg, var(--orange), #f57c00)', 
+                boxShadow: '0 4px 12px rgba(255, 152, 0, 0.2)',
+                color: '#05101e',
+                textDecoration: 'none',
+                lineHeight: '1',
+                borderRadius: '6px',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px',
+                fontWeight: 'bold',
+                fontFamily: 'var(--font)',
+                marginRight: '6px'
+              }}
+              download
+              title="Download Windows Local App (.exe) for perfect YouTube streaming and sound sync on multiple headsets"
+            >
+              <Upload size={12} style={{ transform: 'rotate(180deg)' }} />
+              Download Local App (Windows)
+            </a>
+          )}
           <div className="stat-pill">
             <Activity size={12} />
             <span>{activeCount} active</span>
@@ -1501,6 +1529,41 @@ export default function App() {
 
           {/* Internal scroll body */}
           <div className="player-scroll-body" onDragOver={handleDragOver}>
+
+            {cloudMode && (
+              <div className="connection-warning-card font-mono" style={{ marginBottom: '1.2rem', padding: '14px', border: '1px solid rgba(255, 152, 0, 0.25)', borderRadius: '8px', background: 'rgba(255, 152, 0, 0.03)' }}>
+                <h4 className="text-orange" style={{ margin: '0 0 6px 0', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.82rem' }}>
+                  <Zap size={14} /> Cloud Mode Active
+                </h4>
+                <p style={{ fontSize: '0.74rem', color: 'var(--text-2)', lineHeight: '1.45', margin: '0 0 10px 0' }}>
+                  To play YouTube music and local files in perfect sync across all your headsets without browser blockages, download the Windows application.
+                </p>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <a 
+                    href={`${window.location.protocol}//${backendHost}/HeadsetConnect.exe`}
+                    className="btn-primary small"
+                    style={{ 
+                      padding: '4px 10px', 
+                      height: '24px', 
+                      fontSize: '0.7rem', 
+                      background: 'linear-gradient(135deg, var(--orange), #f57c00)', 
+                      boxShadow: '0 4px 12px rgba(255, 152, 0, 0.2)',
+                      color: '#05101e',
+                      textDecoration: 'none',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      fontWeight: 'bold',
+                      borderRadius: '4px'
+                    }}
+                    download
+                  >
+                    <Upload size={10} style={{ transform: 'rotate(180deg)' }} />
+                    Download Windows App (.exe)
+                  </a>
+                </div>
+              </div>
+            )}
 
             {!wsConnected && (
               <div className="connection-warning-card font-mono" style={{ marginBottom: '1.5rem', padding: '16px', border: '1px dashed var(--red)', borderRadius: '8px', background: 'rgba(255, 82, 82, 0.03)' }}>
