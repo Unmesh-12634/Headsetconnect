@@ -56,6 +56,8 @@ class AudioStreamer:
                     'player_skip': ['webpage', 'configs', 'js'],
                 }
             },
+            'js_runtimes': {'node': {}},
+            'remote_components': ['ejs:github'],
         }
 
         # Dynamic cookies check to bypass cloud IP blocks (e.g. Render)

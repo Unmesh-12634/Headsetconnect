@@ -687,10 +687,12 @@ function SyncedVideoPlayer({ track, isPlaying, progress, latency, onClose, onTog
 
           <div className="video-hud-overlay">
             <div className="video-hud-top">
-              <span className={`sync-status-indicator ${isLagging ? 'lagging' : ''}`}>
-                {cloudMode
-                  ? (isLagging ? 'Syncing...' : '🔊 Playing via Browser')
-                  : (isLagging ? 'Syncing...' : 'Muted - Headsets Synced')
+              <span className={`sync-status-indicator ${isLagging ? 'lagging' : ''} ${ytDirectMode ? 'direct-warning' : ''}`}>
+                {ytDirectMode
+                  ? '⚠️ Direct Play Fallback (Single Device Only)'
+                  : cloudMode
+                    ? (isLagging ? 'Syncing...' : '🔊 Playing via Browser')
+                    : (isLagging ? 'Syncing...' : 'Muted - Headsets Synced')
                 }
               </span>
             </div>
@@ -1608,6 +1610,12 @@ export default function App() {
                       </div>
                     </div>
                   </div>
+
+                  {ytDirectMode && (
+                    <div className="direct-mode-warning-banner">
+                      <span>⚠️ Direct Browser Play fallback active. Audio will only play on the default system device. Multi-device routing is bypassed.</span>
+                    </div>
+                  )}
 
                   <div className="progress-section">
                     <input

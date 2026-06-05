@@ -2312,3 +2312,27 @@ input:checked + .slider::before { transform: translateX(20px); }
   border-color: rgba(0, 229, 255, 0.3);
   box-shadow: 0 0 8px rgba(0, 229, 255, 0.15);
 }
+
+/* Direct Browser Play Mode Warnings */
+.direct-mode-warning-banner {
+  background: rgba(255, 152, 0, 0.08);
+  border: 1px solid rgba(255, 152, 0, 0.25);
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-top: 1rem;
+  font-family: var(--font);
+  font-size: 0.8rem;
+  color: var(--orange);
+  line-height: 1.4;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sync-status-indicator.direct-warning {
+  background: rgba(255, 152, 0, 0.15) !important;
+  color: var(--orange) !important;
+  border-color: rgba(255, 152, 0, 0.3) !important;
+  box-shadow: 0 0 10px rgba(255, 152, 0, 0.15) !important;
+}
+
