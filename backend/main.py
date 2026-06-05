@@ -1,5 +1,5 @@
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, File, UploadFile
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import uvicorn
@@ -127,7 +127,7 @@ app.add_middleware(
 from pydub import AudioSegment
 
 @app.post("/api/upload")
-async def upload_audio_file(file: UploadFile = File(...)):
+async def upload_audio_file(request: Request, file: UploadFile = File(...)):
     try:
         file_ext = os.path.splitext(file.filename)[1]
         unique_filename = f"{uuid.uuid4()}{file_ext}"
@@ -161,14 +161,17 @@ async def upload_audio_file(file: UploadFile = File(...)):
                 logger.error(f"ffprobe fallback failed: {ffprobe_err}")
                 duration = 180.0  # default 3 min
 
+        # Derive base URL from request so this works on both localhost and Render cloud
+        base_url = str(request.base_url).rstrip("/")
+
         is_video = file_ext.lower() in [".mp4", ".webm", ".mkv", ".mov", ".avi", ".flv", ".3gp", ".mpeg", ".mpg"]
         track_info = {
             "id": f"local_{int(time.time() * 1000)}",
             "title": file.filename,
             "duration": duration,
             "uploader": "Local File",
-            "stream_url": f"http://localhost:8000/uploads/{unique_filename}",
-            "url": f"http://localhost:8000/uploads/{unique_filename}",
+            "stream_url": f"{base_url}/uploads/{unique_filename}",
+            "url": f"{base_url}/uploads/{unique_filename}",
             "thumbnail": "",
             "is_local": True,
             "local_path": file_path,
@@ -181,6 +184,7 @@ async def upload_audio_file(file: UploadFile = File(...)):
     except Exception as e:
         logger.error(f"Error handling upload: {e}")
         return {"success": False, "error": str(e)}
+
 
 
 # ── WebSocket connection manager ─────────────────────────────────────────────

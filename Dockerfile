@@ -32,6 +32,11 @@ WORKDIR /app
 COPY backend/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Force-upgrade yt-dlp to latest nightly at image build time.
+# YouTube's anti-bot defences change frequently; running an outdated yt-dlp
+# is the #1 cause of "Sign in to confirm you're not a bot" errors on cloud IPs.
+RUN pip install --no-cache-dir --upgrade "yt-dlp[default]"
+
 # Copy backend application files
 COPY backend/ /app/
 
@@ -42,6 +47,7 @@ COPY --from=frontend-builder /frontend/dist /frontend/dist
 EXPOSE 8000
 ENV PORT=8000
 ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
 
 # Run the API server
 CMD uvicorn main:app --host 0.0.0.0 --port $PORT

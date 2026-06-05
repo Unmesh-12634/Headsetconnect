@@ -104,19 +104,29 @@ const getConnectionColor = (type) => {
 
 // Get initially resolved backend host (host:port or domain)
 const getInitialBackendHost = () => {
+  // 1. User-saved override (from Settings modal) takes highest priority
   const saved = localStorage.getItem('hc_backend_host');
   if (saved) return saved;
 
-  const isLocalhost = window.location.hostname === 'localhost' || 
-                      window.location.hostname === '127.0.0.1' || 
-                      window.location.hostname.startsWith('192.168.') || 
-                      window.location.hostname.startsWith('10.') || 
+  // 2. Build-time env var — set VITE_BACKEND_URL in Vercel project settings
+  //    to point at your Render backend (e.g. "headsetconnect.onrender.com")
+  if (import.meta.env.VITE_BACKEND_URL) {
+    return import.meta.env.VITE_BACKEND_URL;
+  }
+
+  // 3. Local development — connect to local backend port
+  const isLocalhost = window.location.hostname === 'localhost' ||
+                      window.location.hostname === '127.0.0.1' ||
+                      window.location.hostname.startsWith('192.168.') ||
+                      window.location.hostname.startsWith('10.') ||
                       window.location.hostname.startsWith('172.');
-  
+
   if (isLocalhost) {
     return `${window.location.hostname}:8000`;
   }
-  return window.location.host; // Default fallback to current host (e.g. Render cloud deployment)
+
+  // 4. Last resort: same host (only works when frontend + backend are co-deployed, e.g. Render)
+  return window.location.host;
 };
 
 // Rewrite local media source URLs dynamically if connecting to a remote backend host
