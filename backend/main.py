@@ -435,6 +435,8 @@ async def websocket_endpoint(websocket: WebSocket):
                             streamer.yt_direct_mode = True
                             streamer.current_track = track
                             audio_engine.is_playing = True
+                            audio_engine.seek_offset_seconds = 0.0
+                            audio_engine._last_play_time = time.time()
                             await websocket.send_text(json.dumps({
                                 "type": "youtube_play_direct",
                                 "track": track,

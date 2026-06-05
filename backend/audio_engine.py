@@ -805,8 +805,12 @@ class AudioEngine:
             return
         self.is_playing = True
         logger.info("Master playback started")
-        if not PORTAUDIO_AVAILABLE:
+        from streamer import streamer
+        is_yt_direct = getattr(streamer, 'yt_direct_mode', False)
+        if not PORTAUDIO_AVAILABLE or is_yt_direct:
             self._last_play_time = time.time()
+        if is_yt_direct:
+            return
         with self.buffer_lock:
             for dev in self.devices.values():
                 if dev.active:
@@ -817,16 +821,22 @@ class AudioEngine:
             return
         self.is_playing = False
         logger.info("Master playback paused")
-        if not PORTAUDIO_AVAILABLE:
+        from streamer import streamer
+        is_yt_direct = getattr(streamer, 'yt_direct_mode', False)
+        if not PORTAUDIO_AVAILABLE or is_yt_direct:
             now = time.time()
             self.seek_offset_seconds += (now - self._last_play_time)
             self._last_play_time = now
+        if is_yt_direct:
+            return
         for dev in self.devices.values():
             dev.stop_playback(preserve_cursor=True)
 
     def get_play_progress(self):
         """Return the current playback position in seconds."""
-        if not PORTAUDIO_AVAILABLE:
+        from streamer import streamer
+        is_yt_direct = getattr(streamer, 'yt_direct_mode', False)
+        if not PORTAUDIO_AVAILABLE or is_yt_direct:
             if self.is_playing:
                 now = time.time()
                 return self.seek_offset_seconds + (now - self._last_play_time)
@@ -846,8 +856,13 @@ class AudioEngine:
         logger.info(f"Seeking to {seconds}s...")
         was_playing = self.is_playing
         self.seek_offset_seconds = seconds
-        if not PORTAUDIO_AVAILABLE:
+        is_yt_direct = getattr(streamer, 'yt_direct_mode', False)
+        if not PORTAUDIO_AVAILABLE or is_yt_direct:
             self._last_play_time = time.time()
+        if is_yt_direct:
+            if not was_playing:
+                self.pause()
+            return
         self.clear_buffer(keep_seek_offset=True)
         streamer.play_track(streamer.current_track, start_seconds=seconds, keep_seek_offset=True)
         if not was_playing:

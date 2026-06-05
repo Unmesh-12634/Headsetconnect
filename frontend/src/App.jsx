@@ -17,6 +17,8 @@ import {
   SquareX,
   ChevronDown,
   ChevronUp,
+  ChevronLeft,
+  ChevronRight,
   Activity,
   Settings2,
   Bluetooth,
@@ -404,6 +406,7 @@ function SyncedVideoPlayer({ track, isPlaying, progress, latency, onClose, onTog
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isLagging, setIsLagging] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
+  const isProgrammaticSeekRef = useRef(false);
 
   // Target time for the video player (adjusted for headset latency)
   const videoTargetTime = Math.max(0, progress - (latency / 1000.0));
@@ -501,9 +504,9 @@ function SyncedVideoPlayer({ track, isPlaying, progress, latency, onClose, onTog
         videoId: videoId,
         playerVars: {
           autoplay: isPlaying ? 1 : 0,
-          controls: 0,
-          disablekb: 1,
-          fs: 0,
+          controls: 1,
+          disablekb: 0,
+          fs: 1,
           rel: 0,
           showinfo: 0,
           iv_load_policy: 3,
@@ -522,13 +525,26 @@ function SyncedVideoPlayer({ track, isPlaying, progress, latency, onClose, onTog
             } else {
               event.target.mute();
             }
+            isProgrammaticSeekRef.current = true;
             event.target.seekTo(videoTargetTime, true);
+            setTimeout(() => {
+              isProgrammaticSeekRef.current = false;
+            }, 1000);
             if (isPlaying) {
               event.target.playVideo();
             } else {
               event.target.pauseVideo();
             }
             setYtPlayer(event.target);
+          },
+          onStateChange: (event) => {
+            const playerState = event.data;
+            // 1 = PLAYING, 2 = PAUSED
+            if (playerState === 2 && isPlaying) {
+              onTogglePlay();
+            } else if (playerState === 1 && !isPlaying) {
+              onTogglePlay();
+            }
           }
         }
       });
@@ -576,24 +592,50 @@ function SyncedVideoPlayer({ track, isPlaying, progress, latency, onClose, onTog
     }
   }, [ytDirectMode, ytPlayer, isYouTube]);
 
+  // Sync YouTube player progress with backend when it drifts
   useEffect(() => {
     if (!isYouTube || !ytPlayer) return;
     try {
       const ytTime = ytPlayer.getCurrentTime();
       const diff = Math.abs(ytTime - videoTargetTime);
       if (diff > 0.4) {
+        isProgrammaticSeekRef.current = true;
         ytPlayer.seekTo(videoTargetTime, true);
-        const lagTimer = setTimeout(() => setIsLagging(true), 0);
-        const timer = setTimeout(() => setIsLagging(false), 300);
+        const timer = setTimeout(() => {
+          isProgrammaticSeekRef.current = false;
+        }, 1000);
+        
+        setIsLagging(true);
+        const lagTimer = setTimeout(() => setIsLagging(false), 300);
         return () => {
-          clearTimeout(lagTimer);
           clearTimeout(timer);
+          clearTimeout(lagTimer);
         };
       }
     } catch (e) {
       console.warn("YouTube progress sync error:", e);
     }
   }, [videoTargetTime, ytPlayer, isYouTube]);
+
+  // Poll YouTube player progress to detect manual seek by user
+  useEffect(() => {
+    if (!isYouTube || !ytPlayer) return;
+
+    const interval = setInterval(() => {
+      try {
+        const ytTime = ytPlayer.getCurrentTime();
+        const diff = Math.abs(ytTime - videoTargetTime);
+        if (diff > 2.0 && !isProgrammaticSeekRef.current) {
+          console.log(`Detected manual seek to ${ytTime}s (target was ${videoTargetTime}s)`);
+          onSeek(ytTime);
+        }
+      } catch (e) {
+        // Player might not be ready
+      }
+    }, 250);
+
+    return () => clearInterval(interval);
+  }, [isYouTube, ytPlayer, videoTargetTime, onSeek]);
 
 
 
@@ -672,8 +714,14 @@ function SyncedVideoPlayer({ track, isPlaying, progress, latency, onClose, onTog
 
               <div className="video-hud-actions-row">
                 <div className="video-hud-left-actions">
+                  <button className="video-hud-icon-btn" onClick={() => onSeek(Math.max(0, progress - 10))} title="Rewind 10s">
+                    <ChevronLeft size={16} fill="var(--text-1)" />
+                  </button>
                   <button className="video-hud-icon-btn" onClick={onTogglePlay} title={isPlaying ? 'Pause' : 'Play'}>
                     {isPlaying ? <Pause size={16} fill="var(--text-1)" /> : <Play size={16} fill="var(--text-1)" />}
+                  </button>
+                  <button className="video-hud-icon-btn" onClick={() => onSeek(Math.min(track.duration || 100, progress + 10))} title="Forward 10s">
+                    <ChevronRight size={16} fill="var(--text-1)" />
                   </button>
                   <span className="video-hud-time font-mono">
                     {formatTime(videoTargetTime)} / {formatTime(track.duration)}
