@@ -766,6 +766,11 @@ export default function App() {
   const [isPlaying,      setIsPlaying]      = useState(false);
   const [progress,       setProgress]       = useState(0);
   const [currentTrack,   setCurrentTrack]   = useState(null);
+  const [loadingTrackId, setLoadingTrackId] = useState(null);
+  const loadingTrackIdRef = useRef(null);
+  useEffect(() => {
+    loadingTrackIdRef.current = loadingTrackId;
+  }, [loadingTrackId]);
   const [musicQuery,     setMusicQuery]     = useState('');
   const [deviceSearch,   setDeviceSearch]   = useState('');
   const [searchResults,  setSearchResults]  = useState([]);
@@ -1086,6 +1091,9 @@ export default function App() {
             setYtDirectMode(nextDirectMode);
 
             setCurrentTrack(msg.current_track);
+            if (msg.current_track && msg.current_track.id === loadingTrackIdRef.current) {
+              setLoadingTrackId(null);
+            }
             setIsScanning(false);
             if (msg.cloud_mode !== undefined) setCloudMode(msg.cloud_mode);
 
@@ -1095,6 +1103,7 @@ export default function App() {
           } else if (msg.type === 'youtube_play_direct') {
             // Cloud mode fallback: play YouTube in browser IFrame directly.
             setCurrentTrack(msg.track);
+            setLoadingTrackId(null);
             setIsPlaying(true);
             setYtDirectMode(true);
             setShowVideo(true);  // auto-open theater so the IFrame plays with audio
@@ -1162,6 +1171,10 @@ export default function App() {
   const handlePlayTrack  = (track) => {
     if (cloudMode) clearWebAudioBuffer();
     setYtDirectMode(false);
+    setLoadingTrackId(track.id);
+    setTimeout(() => {
+      setLoadingTrackId(prev => prev === track.id ? null : prev);
+    }, 12000);
     send({ action: 'play_track', track });
     setSearchResults([]);
     setMusicQuery('');
@@ -1564,7 +1577,15 @@ export default function App() {
 
             {/* Now Playing */}
             <div className="now-playing-card" style={{ marginTop: '1.2rem' }}>
-              {currentTrack ? (
+              {loadingTrackId ? (
+                <div className="no-track loading" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '180px', gap: '12px', textAlign: 'center' }}>
+                  <RefreshCw size={36} className="text-cyan" style={{ animation: 'spin 1.5s linear infinite' }} />
+                  <h3 className="text-cyan font-mono" style={{ fontSize: '1rem', fontWeight: 600 }}>Loading Audio Stream...</h3>
+                  <p className="font-mono text-dim" style={{ fontSize: '0.75rem', maxWidth: '80%', lineHeight: '1.4' }}>
+                    Resolving media links and preparing audio buffers. Please wait...
+                  </p>
+                </div>
+              ) : currentTrack ? (
                 <>
                   <div className="track-display">
                     <div className="art-wrap">
