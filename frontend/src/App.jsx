@@ -962,6 +962,17 @@ export default function App() {
   const reconnectRef = useRef(null);
   const touchStartRef = useRef(null);
 
+  // Refs to avoid closing over stale state inside ws.onmessage without causing reconnects
+  const currentTrackRef = useRef(currentTrack);
+  useEffect(() => {
+    currentTrackRef.current = currentTrack;
+  }, [currentTrack]);
+
+  const ytDirectModeRef = useRef(ytDirectMode);
+  useEffect(() => {
+    ytDirectModeRef.current = ytDirectMode;
+  }, [ytDirectMode]);
+
   // ── WebSocket ───────────────────────────────────────────────────────────────
 
   useEffect(() => {
@@ -1004,12 +1015,12 @@ export default function App() {
             setProgress(msg.progress || 0);
             
             const nextDirectMode = msg.yt_direct_mode || false;
-            if (msg.current_track?.id !== currentTrack?.id) {
+            if (msg.current_track?.id !== currentTrackRef.current?.id) {
               clearWebAudioBuffer();
               if (nextDirectMode) {
                 setShowVideo(true);
               }
-            } else if (nextDirectMode && !ytDirectMode) {
+            } else if (nextDirectMode && !ytDirectModeRef.current) {
               setShowVideo(true);
             }
             setYtDirectMode(nextDirectMode);
@@ -1060,7 +1071,7 @@ export default function App() {
 
     connectWebSocket();
     return () => { wsRef.current?.close(); clearTimeout(reconnectRef.current); };
-  }, [backendHost, currentTrack]);
+  }, [backendHost]);
 
   // ── Actions ─────────────────────────────────────────────────────────────────
 
