@@ -310,6 +310,7 @@ def get_system_state() -> dict:
         # Tells the frontend whether the backend has real audio hardware.
         # When False, the frontend handles YouTube playback via IFrame API.
         "cloud_mode": not PORTAUDIO_AVAILABLE,
+        "yt_direct_mode": getattr(streamer, 'yt_direct_mode', False),
     }
 
 
@@ -430,10 +431,15 @@ async def websocket_endpoint(websocket: WebSocket):
                             streamer.play_track(full_info)
                             await manager.broadcast(get_system_state())
                         else:
+                            logger.warning(f"YouTube extraction failed for {track.get('title')}. Falling back to direct browser IFrame play.")
+                            streamer.yt_direct_mode = True
+                            streamer.current_track = track
+                            audio_engine.is_playing = True
                             await websocket.send_text(json.dumps({
-                                "type": "error",
-                                "message": "Failed to extract streaming link from YouTube.",
+                                "type": "youtube_play_direct",
+                                "track": track,
                             }))
+                            await manager.broadcast(get_system_state())
 
             elif action == "add_to_queue":
                 track = message.get("track")

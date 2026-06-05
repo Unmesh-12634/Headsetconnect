@@ -395,7 +395,7 @@ function DeviceCard({ device, isNew, calibrationState, onToggle, onVolume, onDel
 
 // ─── SyncedVideoPlayer ───────────────────────────────────────────────────────
 
-function SyncedVideoPlayer({ track, isPlaying, progress, latency, onClose, onTogglePlay, onSeek, backendHost, cloudMode, onProgress }) {
+function SyncedVideoPlayer({ track, isPlaying, progress, latency, onClose, onTogglePlay, onSeek, backendHost, cloudMode, onProgress, ytDirectMode }) {
   const isYouTube = !track.is_local;
   const videoRef = useRef(null);
   const containerRef = useRef(null);
@@ -515,9 +515,13 @@ function SyncedVideoPlayer({ track, isPlaying, progress, latency, onClose, onTog
               event.target.destroy();
               return;
             }
-            // The YouTube player is always muted because audio playback is handled
-            // by either the backend AudioEngine (local mode) or Web Audio API (cloud mode).
-            event.target.mute();
+            // Muted in streaming mode, unmuted in direct browser play mode
+            if (ytDirectMode) {
+              event.target.unMute();
+              event.target.setVolume(100);
+            } else {
+              event.target.mute();
+            }
             event.target.seekTo(videoTargetTime, true);
             if (isPlaying) {
               event.target.playVideo();
@@ -557,6 +561,20 @@ function SyncedVideoPlayer({ track, isPlaying, progress, latency, onClose, onTog
       console.warn("YouTube playState sync error:", e);
     }
   }, [isPlaying, ytPlayer, isYouTube]);
+
+  useEffect(() => {
+    if (!isYouTube || !ytPlayer) return;
+    try {
+      if (ytDirectMode) {
+        ytPlayer.unMute();
+        ytPlayer.setVolume(100);
+      } else {
+        ytPlayer.mute();
+      }
+    } catch (e) {
+      console.warn("YouTube mute state sync error:", e);
+    }
+  }, [ytDirectMode, ytPlayer, isYouTube]);
 
   useEffect(() => {
     if (!isYouTube || !ytPlayer) return;
@@ -713,6 +731,7 @@ export default function App() {
   // In cloud mode, YouTube playback is handled by the browser's IFrame API instead
   // of being streamed server-side via yt-dlp + ffmpeg + sounddevice.
   const [cloudMode, setCloudMode] = useState(false);
+  const [ytDirectMode, setYtDirectMode] = useState(false);
 
   const [backendHost, setBackendHost] = useState(getInitialBackendHost);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
@@ -984,9 +1003,17 @@ export default function App() {
             setIsPlaying(msg.is_playing);
             setProgress(msg.progress || 0);
             
+            const nextDirectMode = msg.yt_direct_mode || false;
             if (msg.current_track?.id !== currentTrack?.id) {
               clearWebAudioBuffer();
+              if (nextDirectMode) {
+                setShowVideo(true);
+              }
+            } else if (nextDirectMode && !ytDirectMode) {
+              setShowVideo(true);
             }
+            setYtDirectMode(nextDirectMode);
+
             setCurrentTrack(msg.current_track);
             setIsScanning(false);
             if (msg.cloud_mode !== undefined) setCloudMode(msg.cloud_mode);
@@ -995,9 +1022,10 @@ export default function App() {
             if (msg.queue !== undefined) setQueue(msg.queue || []);
             if (msg.library !== undefined) setLibrary(msg.library || []);
           } else if (msg.type === 'youtube_play_direct') {
-            // Cloud mode: backend has no audio hardware, play YouTube in browser IFrame.
+            // Cloud mode fallback: play YouTube in browser IFrame directly.
             setCurrentTrack(msg.track);
             setIsPlaying(true);
+            setYtDirectMode(true);
             setShowVideo(true);  // auto-open theater so the IFrame plays with audio
           } else if (msg.type === 'search_results') {
             setSearchResults(msg.results || []);
@@ -1060,7 +1088,13 @@ export default function App() {
     send({ action: 'search', query: musicQuery });
   };
 
-  const handlePlayTrack  = (track) => { if (cloudMode) clearWebAudioBuffer(); send({ action: 'play_track', track }); setSearchResults([]); setMusicQuery(''); };
+  const handlePlayTrack  = (track) => {
+    if (cloudMode) clearWebAudioBuffer();
+    setYtDirectMode(false);
+    send({ action: 'play_track', track });
+    setSearchResults([]);
+    setMusicQuery('');
+  };
   const handleTogglePlay = ()       => send({ action: isPlaying ? 'pause' : 'play' });
   const handleStop       = ()       => send({ action: 'stop' });
   const handleSeek       = (e)      => { const s = parseFloat(e.target.value); setProgress(s); if (cloudMode) clearWebAudioBuffer(); send({ action: 'seek', seconds: s }); };
@@ -1805,6 +1839,7 @@ export default function App() {
           backendHost={backendHost}
           cloudMode={cloudMode}
           onProgress={(t) => setProgress(t)}
+          ytDirectMode={ytDirectMode}
         />
       )}
 

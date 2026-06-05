@@ -28,6 +28,7 @@ class AudioStreamer:
         self.sample_rate = 44100
         self.queue = []
         self.library = []
+        self.yt_direct_mode = False
 
         # Callback so main.py can broadcast state after track ends
         self.on_state_changed = None  # set by main.py after creation
@@ -539,6 +540,7 @@ class AudioStreamer:
     def play_track(self, track_info, start_seconds=0, keep_seek_offset=False):
         """Start streaming and decoding an audio track into the audio engine."""
         self.stop_track(keep_seek_offset=keep_seek_offset)
+        self.yt_direct_mode = False
 
         self.current_track = track_info
         self.stop_event.clear()
