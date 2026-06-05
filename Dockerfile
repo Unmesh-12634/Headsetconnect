@@ -40,8 +40,9 @@ RUN pip install --no-cache-dir --upgrade "yt-dlp[default]"
 # Copy backend application files
 COPY backend/ /app/
 
-# Copy the pre-compiled Windows executable for download
+# Copy the pre-compiled Windows executable and zip archive for download
 COPY dist/HeadsetConnect.exe /dist/HeadsetConnect.exe
+COPY dist/HeadsetConnect-Windows.zip /dist/HeadsetConnect-Windows.zip
 
 # Copy compiled frontend build assets into /frontend/dist so FastAPI main.py mounts it automatically
 COPY --from=frontend-builder /frontend/dist /frontend/dist

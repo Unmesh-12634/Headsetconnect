@@ -1427,32 +1427,59 @@ export default function App() {
         </div>
         <div className="header-right">
           {cloudMode && (
-            <a 
-              href={`${window.location.protocol}//${backendHost}/HeadsetConnect.exe`}
-              className="btn-primary small"
-              style={{ 
-                padding: '4px 10px', 
-                height: '24px', 
-                fontSize: '0.72rem', 
-                background: 'linear-gradient(135deg, var(--orange), #f57c00)', 
-                boxShadow: '0 4px 12px rgba(255, 152, 0, 0.2)',
-                color: '#05101e',
-                textDecoration: 'none',
-                lineHeight: '1',
-                borderRadius: '6px',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '4px',
-                fontWeight: 'bold',
-                fontFamily: 'var(--font)',
-                marginRight: '6px'
-              }}
-              download
-              title="Download Windows Local App (.exe) for perfect YouTube streaming and sound sync on multiple headsets"
-            >
-              <Upload size={12} style={{ transform: 'rotate(180deg)' }} />
-              Download Local App (Windows)
-            </a>
+            <>
+              <a 
+                href="headsetconnect://"
+                className="btn-primary small"
+                style={{ 
+                  padding: '4px 10px', 
+                  height: '24px', 
+                  fontSize: '0.72rem', 
+                  background: 'linear-gradient(135deg, var(--cyan), #00b0ff)', 
+                  boxShadow: '0 4px 12px rgba(0, 176, 255, 0.2)',
+                  color: '#05101e',
+                  textDecoration: 'none',
+                  lineHeight: '1',
+                  borderRadius: '6px',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  fontWeight: 'bold',
+                  fontFamily: 'var(--font)',
+                  marginRight: '6px'
+                }}
+                title="Launch the local application automatically if already downloaded and run once."
+              >
+                <Zap size={12} />
+                Open Local App
+              </a>
+              <a 
+                href={`${window.location.protocol}//${backendHost}/HeadsetConnect-Windows.zip`}
+                className="btn-primary small"
+                style={{ 
+                  padding: '4px 10px', 
+                  height: '24px', 
+                  fontSize: '0.72rem', 
+                  background: 'linear-gradient(135deg, var(--orange), #f57c00)', 
+                  boxShadow: '0 4px 12px rgba(255, 152, 0, 0.2)',
+                  color: '#05101e',
+                  textDecoration: 'none',
+                  lineHeight: '1',
+                  borderRadius: '6px',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  fontWeight: 'bold',
+                  fontFamily: 'var(--font)',
+                  marginRight: '6px'
+                }}
+                download
+                title="Download Windows Local App (.zip) for perfect YouTube streaming and sound sync on multiple headsets"
+              >
+                <Upload size={12} style={{ transform: 'rotate(180deg)' }} />
+                Download Local App (Windows)
+              </a>
+            </>
           )}
           <div className="stat-pill">
             <Activity size={12} />
@@ -1540,7 +1567,28 @@ export default function App() {
                 </p>
                 <div style={{ display: 'flex', gap: '8px' }}>
                   <a 
-                    href={`${window.location.protocol}//${backendHost}/HeadsetConnect.exe`}
+                    href="headsetconnect://"
+                    className="btn-primary small"
+                    style={{ 
+                      padding: '4px 10px', 
+                      height: '24px', 
+                      fontSize: '0.7rem', 
+                      background: 'linear-gradient(135deg, var(--cyan), #00b0ff)', 
+                      boxShadow: '0 4px 12px rgba(0, 176, 255, 0.2)',
+                      color: '#05101e',
+                      textDecoration: 'none',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      fontWeight: 'bold',
+                      borderRadius: '4px'
+                    }}
+                  >
+                    <Zap size={10} />
+                    Open Local App
+                  </a>
+                  <a 
+                    href={`${window.location.protocol}//${backendHost}/HeadsetConnect-Windows.zip`}
                     className="btn-primary small"
                     style={{ 
                       padding: '4px 10px', 
@@ -1559,7 +1607,7 @@ export default function App() {
                     download
                   >
                     <Upload size={10} style={{ transform: 'rotate(180deg)' }} />
-                    Download Windows App (.exe)
+                    Download Windows App (.zip)
                   </a>
                 </div>
               </div>

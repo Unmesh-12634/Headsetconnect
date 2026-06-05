@@ -2,6 +2,7 @@
 node_modules/
 dist/*
 !dist/HeadsetConnect.exe
+!dist/HeadsetConnect-Windows.zip
 dist-ssr/
 *.local
 

@@ -519,6 +519,26 @@ def download_executable():
         raise HTTPException(status_code=404, detail="Executable not found on server. Run package_app.py first.")
 
 
+@app.get("/HeadsetConnect-Windows.zip")
+def download_zip():
+    import sys
+    if getattr(sys, 'frozen', False):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="Running in packaged desktop mode.")
+        
+    zip_path = os.path.join(BUNDLE_DIR, "dist", "HeadsetConnect-Windows.zip")
+    if os.path.exists(zip_path):
+        from fastapi.responses import FileResponse
+        return FileResponse(
+            zip_path,
+            media_type="application/zip",
+            filename="HeadsetConnect-Windows.zip"
+        )
+    else:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Zip archive not found on server. Run package_app.py first.")
+
+
 # Serve compiled React frontend if the folder exists (for standalone desktop mode)
 if os.path.exists(frontend_dist):
     app.mount("/", StaticFiles(directory=frontend_dist, html=True), name="frontend")

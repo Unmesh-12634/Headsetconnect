@@ -107,10 +107,24 @@ def build():
         print("[ERROR] PyInstaller build failed!")
         sys.exit(1)
 
+    # 4. Zip the executable to bypass browser download warning triggers
+    print("\n[STEP 4] Compiling ZIP archive to bypass browser warnings...")
+    exe_path = os.path.abspath(os.path.join('dist', 'HeadsetConnect.exe'))
+    zip_path = os.path.abspath(os.path.join('dist', 'HeadsetConnect-Windows.zip'))
+    try:
+        import zipfile
+        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            zipf.write(exe_path, 'HeadsetConnect.exe')
+        print(f"[OK] Zip file created at: {zip_path}")
+    except Exception as e:
+        print(f"[ERROR] Failed to compile zip file: {e}")
+        sys.exit(1)
+
     print("\n====================================================")
     print("SUCCESS: HeadsetConnect application packaged!")
     if onefile:
-        print(f"Executable location: {os.path.abspath(os.path.join('dist', 'HeadsetConnect.exe'))}")
+        print(f"Executable location: {exe_path}")
+        print(f"Zip archive location: {zip_path}")
     else:
         print(f"Directory package location: {os.path.abspath('dist')}")
     print("====================================================")
