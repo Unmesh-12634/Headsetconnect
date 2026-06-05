@@ -393,7 +393,7 @@ function DeviceCard({ device, isNew, calibrationState, onToggle, onVolume, onDel
 
 // ─── SyncedVideoPlayer ───────────────────────────────────────────────────────
 
-function SyncedVideoPlayer({ track, isPlaying, progress, latency, onClose, onTogglePlay, onSeek, backendHost }) {
+function SyncedVideoPlayer({ track, isPlaying, progress, latency, onClose, onTogglePlay, onSeek, backendHost, cloudMode, onProgress }) {
   const isYouTube = !track.is_local;
   const videoRef = useRef(null);
   const containerRef = useRef(null);
@@ -513,7 +513,14 @@ function SyncedVideoPlayer({ track, isPlaying, progress, latency, onClose, onTog
               event.target.destroy();
               return;
             }
-            event.target.mute();
+            // In cloud mode the YouTube IFrame IS the audio source — don't mute it.
+            // In local mode it's muted because audio comes from the headset engine.
+            if (!cloudMode) {
+              event.target.mute();
+            } else {
+              event.target.unMute();
+              event.target.setVolume(100);
+            }
             event.target.seekTo(videoTargetTime, true);
             if (isPlaying) {
               event.target.playVideo();
@@ -573,6 +580,19 @@ function SyncedVideoPlayer({ track, isPlaying, progress, latency, onClose, onTog
     }
   }, [videoTargetTime, ytPlayer, isYouTube]);
 
+  // In cloud mode: poll the YouTube IFrame's current time and report it upward
+  // so the main player progress bar stays in sync without backend audio streaming.
+  useEffect(() => {
+    if (!cloudMode || !isYouTube || !ytPlayer) return;
+    const interval = setInterval(() => {
+      try {
+        const t = ytPlayer.getCurrentTime();
+        if (t != null && onProgress) onProgress(t);
+      } catch (e) { /* ignore */ }
+    }, 500);
+    return () => clearInterval(interval);
+  }, [cloudMode, isYouTube, ytPlayer, onProgress]);
+
   const handleSliderSeek = (e) => {
     const time = parseFloat(e.target.value);
     onSeek(time);
@@ -610,7 +630,10 @@ function SyncedVideoPlayer({ track, isPlaying, progress, latency, onClose, onTog
           <div className="video-hud-overlay">
             <div className="video-hud-top">
               <span className={`sync-status-indicator ${isLagging ? 'lagging' : ''}`}>
-                {isLagging ? 'Syncing...' : 'Muted - Headsets Synced'}
+                {cloudMode
+                  ? (isLagging ? 'Syncing...' : '🔊 Playing via Browser')
+                  : (isLagging ? 'Syncing...' : 'Muted - Headsets Synced')
+                }
               </span>
             </div>
 
@@ -700,6 +723,11 @@ export default function App() {
 
   const [draggingIndex, setDraggingIndex] = useState(null);
 
+  // True when the Render backend is running in headless/cloud mode (no PortAudio).
+  // In cloud mode, YouTube playback is handled by the browser's IFrame API instead
+  // of being streamed server-side via yt-dlp + ffmpeg + sounddevice.
+  const [cloudMode, setCloudMode] = useState(false);
+
   const [backendHost, setBackendHost] = useState(getInitialBackendHost);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [tempHost, setTempHost] = useState(backendHost);
@@ -758,10 +786,16 @@ export default function App() {
             setProgress(msg.progress || 0);
             setCurrentTrack(msg.current_track);
             setIsScanning(false);
+            if (msg.cloud_mode !== undefined) setCloudMode(msg.cloud_mode);
 
             // Play Queue, Local Library
             if (msg.queue !== undefined) setQueue(msg.queue || []);
             if (msg.library !== undefined) setLibrary(msg.library || []);
+          } else if (msg.type === 'youtube_play_direct') {
+            // Cloud mode: backend has no audio hardware, play YouTube in browser IFrame.
+            setCurrentTrack(msg.track);
+            setIsPlaying(true);
+            setShowVideo(true);  // auto-open theater so the IFrame plays with audio
           } else if (msg.type === 'search_results') {
             setSearchResults(msg.results || []);
             setIsSearching(false);
@@ -1475,6 +1509,8 @@ export default function App() {
           onTogglePlay={handleTogglePlay}
           onSeek={(seconds) => send({ action: 'seek', seconds })}
           backendHost={backendHost}
+          cloudMode={cloudMode}
+          onProgress={(t) => setProgress(t)}
         />
       )}
 

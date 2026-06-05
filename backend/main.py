@@ -10,7 +10,7 @@ import os
 import shutil
 import time
 import uuid
-from audio_engine import audio_engine
+from audio_engine import audio_engine, PORTAUDIO_AVAILABLE
 from streamer import streamer
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -276,6 +276,9 @@ def get_system_state() -> dict:
         "queue": streamer.queue,
         "library": streamer.library,
         "server_time": time.time() * 1000.0,
+        # Tells the frontend whether the backend has real audio hardware.
+        # When False, the frontend handles YouTube playback via IFrame API.
+        "cloud_mode": not PORTAUDIO_AVAILABLE,
     }
 
 
@@ -386,6 +389,18 @@ async def websocket_endpoint(websocket: WebSocket):
                     logger.info(f"Playing track: {track.get('title')}")
                     if track.get("is_local"):
                         streamer.play_track(track)
+                        await manager.broadcast(get_system_state())
+                    elif not PORTAUDIO_AVAILABLE:
+                        # Cloud/headless mode: no audio hardware available on this server.
+                        # Skip yt-dlp stream extraction (blocked by YouTube on datacenter IPs).
+                        # Signal the frontend to handle YouTube playback directly via IFrame API.
+                        logger.info(f"Cloud mode: delegating YouTube playback to frontend IFrame for: {track.get('title')}")
+                        streamer.current_track = track
+                        audio_engine.is_playing = True
+                        await websocket.send_text(json.dumps({
+                            "type": "youtube_play_direct",
+                            "track": track,
+                        }))
                         await manager.broadcast(get_system_state())
                     else:
                         loop = asyncio.get_running_loop()
