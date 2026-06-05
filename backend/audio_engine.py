@@ -340,14 +340,12 @@ class AudioEngine:
     def get_available_devices(self):
         """Query host system output devices, deduplicated by cleaned name.
 
-        Windows exposes the same physical device via multiple host APIs
-        (MME, DirectSound, WASAPI, WDM-KS).  We:
-          1. Skip WDM-KS entirely — it does not support the blocking API used by
-             sounddevice (PaErrorCode -9999).
-          2. Deduplicate by cleaned name, preferring WASAPI > DirectSound > MME.
-          3. Only refresh the PortAudio cache when not playing and at least 5s
-             have elapsed since the last refresh.
+        Returns an empty list when running in cloud/headless mode (no PortAudio),
+        so the mock device never appears in the UI.
         """
+        if not PORTAUDIO_AVAILABLE:
+            return []
+
         try:
             # Refresh PortAudio device cache only when idle and stale
             now = time.time()

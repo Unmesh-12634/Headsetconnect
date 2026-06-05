@@ -1416,7 +1416,7 @@ export default function App() {
             <div className="panel-title">
               <Bluetooth size={16} />
               <h2>Devices</h2>
-              <span className="badge">{filteredDevices.length}</span>
+              {!cloudMode && <span className="badge">{filteredDevices.length}</span>}
             </div>
             <div className="panel-head-actions">
               <div className="device-search-wrap">
@@ -1430,6 +1430,7 @@ export default function App() {
                   className="device-search-field"
                 />
               </div>
+              {!cloudMode && (
               <button
                 id="refresh-btn"
                 className={`icon-btn refresh-btn ${isScanning ? 'spinning' : ''}`}
@@ -1439,19 +1440,39 @@ export default function App() {
               >
                 <RefreshCw size={14} />
               </button>
+              )}
             </div>
           </div>
 
-          <p className="auto-detect-note">
-            <Headphones size={10} />
-            All playback devices listed · Auto-refreshes every 5s
-          </p>
+          {!cloudMode && (
+            <p className="auto-detect-note">
+              <Headphones size={10} />
+              All playback devices listed · Auto-refreshes every 5s
+            </p>
+          )}
 
 
 
           {/* Scrollable device list */}
           <div className="device-grid">
-            {filteredDevices.length === 0 ? (
+            {cloudMode ? (
+              <div className="empty-state" style={{ padding: '2rem 1rem', textAlign: 'center' }}>
+                <Headphones size={38} style={{ opacity: 0.4, marginBottom: '1rem' }} />
+                <p style={{ fontWeight: 600, marginBottom: '6px' }}>Cloud Mode — No Local Devices</p>
+                <p className="hint" style={{ lineHeight: '1.5' }}>
+                  Headset routing requires the backend running on your <strong>local PC</strong>.<br />
+                  Run <code style={{ background: 'rgba(255,255,255,0.08)', padding: '1px 5px', borderRadius: '3px' }}>run_backend.bat</code> on your computer,
+                  then click the <strong>⚙ Settings</strong> icon and enter your PC's local IP (e.g. <code style={{ background: 'rgba(255,255,255,0.08)', padding: '1px 5px', borderRadius: '3px' }}>192.168.x.x:8000</code>).
+                </p>
+                <button
+                  className="btn-outline"
+                  style={{ marginTop: '1rem', fontSize: '0.78rem' }}
+                  onClick={() => setShowSettingsModal(true)}
+                >
+                  <Settings2 size={12} /> Open Connection Settings
+                </button>
+              </div>
+            ) : filteredDevices.length === 0 ? (
               <div className="empty-state">
                 <Bluetooth size={38} />
                 <p>{deviceSearch ? `No match for "${deviceSearch}"` : 'No Bluetooth headsets found'}</p>
